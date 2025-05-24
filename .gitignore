@@ -1,0 +1,95 @@
+# 민감한 설정 파일들
+config.env
+.env
+*.env
+!config.env.example
+
+# API 키가 포함된 파일들
+api_keys.txt
+secrets.txt
+
+# 데이터베이스 파일들
+*.db
+*.sqlite
+*.sqlite3
+investment_insights.db
+
+# 로그 파일들
+*.log
+logs/
+telegram_bot.log
+
+# Python 관련
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# 가상환경
+venv/
+env/
+ENV/
+.venv/
+.env/
+
+# IDE/에디터 설정
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 운영체제 관련
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# 임시 파일들
+temp/
+tmp/
+*.tmp
+*.temp
+
+# 데이터 디렉토리 (크기가 클 수 있음)
+data/raw/
+data/processed/
+data/downloads/
+
+# 리포트 결과물 (개인정보 포함 가능)
+reports/personal/
+reports/private/
+
+# 백업 파일들
+*.bak
+*.backup
+*.old
+
+# 테스트 결과
+.coverage
+htmlcov/
+.pytest_cache/
+
+# 캐시 파일들
+.cache/
+*.cache 
