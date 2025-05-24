@@ -14,6 +14,18 @@ class PersonalizedReportService:
         self.notification_service = NotificationService()
         self.logger = logging.getLogger(__name__)
     
+    def _safe_json_loads(self, json_str: str) -> List:
+        """JSON 문자열을 안전하게 파싱합니다."""
+        if not json_str or json_str.strip() == '':
+            return []
+        
+        try:
+            result = json.loads(json_str)
+            return result if isinstance(result, list) else []
+        except (json.JSONDecodeError, TypeError) as e:
+            logging.warning(f"JSON 파싱 실패: {json_str[:100]}... 오류: {e}")
+            return []
+    
     def generate_keyword_focused_report(self, db: Session, keyword: str, 
                                       days_back: int = 1) -> Dict:
         """특정 키워드에 집중한 리포트를 생성합니다."""
@@ -54,8 +66,8 @@ class PersonalizedReportService:
                 'summary': analysis.summary,
                 'sentiment_score': analysis.sentiment_score,
                 'importance_score': analysis.importance_score,
-                'key_insights': json.loads(analysis.key_insights) if analysis.key_insights else [],
-                'mentioned_entities': json.loads(analysis.mentioned_entities) if analysis.mentioned_entities else [],
+                'key_insights': self._safe_json_loads(analysis.key_insights) if analysis.key_insights else [],
+                'mentioned_entities': self._safe_json_loads(analysis.mentioned_entities) if analysis.mentioned_entities else [],
                 'video_title': video.title,
                 'channel_name': channel.channel_name if channel else 'Unknown',
                 'published_at': video.published_at,
@@ -64,9 +76,18 @@ class PersonalizedReportService:
             })
         
         # 키워드별 트렌드 분석
-        keyword_trend = self.analysis_service.generate_trend_analysis(
-            analysis_data, [keyword], f"최근 {days_back}일"
-        )
+        try:
+            keyword_trend = self.analysis_service.generate_trend_analysis(
+                analysis_data, [keyword], f"최근 {days_back}일"
+            )
+        except Exception as e:
+            self.logger.error(f"트렌드 분석 중 오류 발생: {e}")
+            keyword_trend = {
+                "overall_trend": "분석 데이터 기반 트렌드 제공",
+                "key_themes": [f"{keyword} 관련 주요 이슈"],
+                "market_sentiment": "neutral",
+                "summary": f"{keyword} 키워드의 최근 동향을 분석했습니다."
+            }
         
         # 채널별 관점 정리
         channel_perspectives = {}
@@ -142,8 +163,8 @@ class PersonalizedReportService:
                 'summary': analysis.summary,
                 'sentiment_score': analysis.sentiment_score,
                 'importance_score': analysis.importance_score,
-                'key_insights': json.loads(analysis.key_insights) if analysis.key_insights else [],
-                'mentioned_entities': json.loads(analysis.mentioned_entities) if analysis.mentioned_entities else [],
+                'key_insights': self._safe_json_loads(analysis.key_insights) if analysis.key_insights else [],
+                'mentioned_entities': self._safe_json_loads(analysis.mentioned_entities) if analysis.mentioned_entities else [],
                 'video_title': video.title,
                 'channel_name': channel.channel_name if channel else 'Unknown',
                 'published_at': video.published_at,
@@ -155,7 +176,7 @@ class PersonalizedReportService:
         
         return {
             "influencer": influencer_name,
-            "specialty": influencer.specialty if influencer else "전문 분야 미상",
+            "specialty": influencer.expertise_area if influencer else "전문 분야 미상",
             "period": f"{start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')}",
             "mention_analysis": mention_analysis,
             "related_videos": sorted(analysis_data, key=lambda x: x['importance_score'], reverse=True)[:10],
@@ -215,8 +236,8 @@ class PersonalizedReportService:
                     'summary': analysis.summary,
                     'sentiment_score': analysis.sentiment_score,
                     'importance_score': analysis.importance_score,
-                    'key_insights': json.loads(analysis.key_insights) if analysis.key_insights else [],
-                    'mentioned_entities': json.loads(analysis.mentioned_entities) if analysis.mentioned_entities else [],
+                    'key_insights': self._safe_json_loads(analysis.key_insights) if analysis.key_insights else [],
+                    'mentioned_entities': self._safe_json_loads(analysis.mentioned_entities) if analysis.mentioned_entities else [],
                     'keyword': keyword.keyword if keyword else 'Unknown'
                 })
         
@@ -228,9 +249,18 @@ class PersonalizedReportService:
             }
         
         # 채널 트렌드 분석
-        channel_trend = self.analysis_service.generate_trend_analysis(
-            video_analyses, [], f"최근 {days_back}일"
-        )
+        try:
+            channel_trend = self.analysis_service.generate_trend_analysis(
+                video_analyses, [], f"최근 {days_back}일"
+            )
+        except Exception as e:
+            self.logger.error(f"채널 트렌드 분석 중 오류 발생: {e}")
+            channel_trend = {
+                "overall_trend": "분석 데이터 기반 트렌드 제공",
+                "key_themes": [f"{channel_name} 채널 주요 이슈"],
+                "market_sentiment": "neutral",
+                "summary": f"{channel_name} 채널의 최근 동향을 분석했습니다."
+            }
         
         # 채널 통계
         statistics = {

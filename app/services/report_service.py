@@ -34,23 +34,60 @@ class ReportService:
         # 분석 결과를 딕셔너리 형태로 변환
         analysis_dicts = []
         for analysis in analyses:
-            video = db.query(Video).filter(Video.video_id == analysis.video_id).first()
-            channel = db.query(Channel).filter(Channel.channel_id == video.channel_id).first()
-            keyword = db.query(Keyword).filter(Keyword.id == analysis.keyword_id).first()
-            
-            analysis_dict = {
-                'summary': analysis.summary,
-                'sentiment_score': analysis.sentiment_score,
-                'importance_score': analysis.importance_score,
-                'key_insights': json.loads(analysis.key_insights) if analysis.key_insights else [],
-                'mentioned_entities': json.loads(analysis.mentioned_entities) if analysis.mentioned_entities else [],
-                'video_title': video.title,
-                'channel_name': channel.channel_name if channel else 'Unknown',
-                'keyword': keyword.keyword if keyword else 'Unknown',
-                'published_at': video.published_at,
-                'video_url': video.video_url
-            }
-            analysis_dicts.append(analysis_dict)
+            try:
+                video = db.query(Video).filter(Video.video_id == analysis.video_id).first()
+                channel = db.query(Channel).filter(Channel.channel_id == video.channel_id).first()
+                keyword = db.query(Keyword).filter(Keyword.id == analysis.keyword_id).first()
+                
+                # JSON 필드 안전하게 파싱
+                key_insights = []
+                if analysis.key_insights:
+                    try:
+                        key_insights = json.loads(analysis.key_insights)
+                        if not isinstance(key_insights, list):
+                            key_insights = []
+                    except (json.JSONDecodeError, TypeError):
+                        key_insights = []
+                
+                mentioned_entities = []
+                if analysis.mentioned_entities:
+                    try:
+                        mentioned_entities = json.loads(analysis.mentioned_entities)
+                        if not isinstance(mentioned_entities, list):
+                            mentioned_entities = []
+                    except (json.JSONDecodeError, TypeError):
+                        mentioned_entities = []
+                
+                analysis_dict = {
+                    'summary': analysis.summary or '',
+                    'sentiment_score': analysis.sentiment_score or 0.0,
+                    'importance_score': analysis.importance_score or 0.0,
+                    'key_insights': key_insights,
+                    'mentioned_entities': mentioned_entities,
+                    'video_title': video.title if video else 'Unknown',
+                    'channel_name': channel.channel_name if channel else 'Unknown',
+                    'keyword': keyword.keyword if keyword else 'Unknown',
+                    'published_at': video.published_at if video else start_date,
+                    'video_url': video.video_url if video else ''
+                }
+                analysis_dicts.append(analysis_dict)
+                
+            except Exception as e:
+                self.logger.error(f"분석 데이터 변환 중 오류: {e}")
+                # 기본 데이터로라도 포함
+                analysis_dict = {
+                    'summary': analysis.summary or '',
+                    'sentiment_score': analysis.sentiment_score or 0.0,
+                    'importance_score': analysis.importance_score or 0.0,
+                    'key_insights': [],
+                    'mentioned_entities': [],
+                    'video_title': 'Unknown',
+                    'channel_name': 'Unknown',
+                    'keyword': 'Unknown',
+                    'published_at': start_date,
+                    'video_url': ''
+                }
+                analysis_dicts.append(analysis_dict)
         
         return analysis_dicts
     
@@ -103,22 +140,47 @@ class ReportService:
         # 채널별로 그룹화
         channel_analyses = {}
         for analysis in analyses:
-            video = db.query(Video).filter(Video.video_id == analysis.video_id).first()
-            channel = db.query(Channel).filter(Channel.channel_id == video.channel_id).first()
-            
-            if channel:
-                channel_name = channel.channel_name
-                if channel_name not in channel_analyses:
-                    channel_analyses[channel_name] = []
+            try:
+                video = db.query(Video).filter(Video.video_id == analysis.video_id).first()
+                channel = db.query(Channel).filter(Channel.channel_id == video.channel_id).first()
                 
-                analysis_dict = {
-                    'summary': analysis.summary,
-                    'sentiment_score': analysis.sentiment_score,
-                    'importance_score': analysis.importance_score,
-                    'key_insights': json.loads(analysis.key_insights) if analysis.key_insights else [],
-                    'mentioned_entities': json.loads(analysis.mentioned_entities) if analysis.mentioned_entities else []
-                }
-                channel_analyses[channel_name].append(analysis_dict)
+                if channel:
+                    channel_name = channel.channel_name
+                    if channel_name not in channel_analyses:
+                        channel_analyses[channel_name] = []
+                    
+                    # JSON 필드 안전하게 파싱
+                    key_insights = []
+                    if analysis.key_insights:
+                        try:
+                            key_insights = json.loads(analysis.key_insights)
+                            if not isinstance(key_insights, list):
+                                key_insights = []
+                        except (json.JSONDecodeError, TypeError):
+                            self.logger.warning(f"key_insights JSON 파싱 실패: {analysis.key_insights}")
+                            key_insights = []
+                    
+                    mentioned_entities = []
+                    if analysis.mentioned_entities:
+                        try:
+                            mentioned_entities = json.loads(analysis.mentioned_entities)
+                            if not isinstance(mentioned_entities, list):
+                                mentioned_entities = []
+                        except (json.JSONDecodeError, TypeError):
+                            self.logger.warning(f"mentioned_entities JSON 파싱 실패: {analysis.mentioned_entities}")
+                            mentioned_entities = []
+                    
+                    analysis_dict = {
+                        'summary': analysis.summary or '',
+                        'sentiment_score': analysis.sentiment_score or 0.0,
+                        'importance_score': analysis.importance_score or 0.0,
+                        'key_insights': key_insights,
+                        'mentioned_entities': mentioned_entities
+                    }
+                    channel_analyses[channel_name].append(analysis_dict)
+            except Exception as e:
+                self.logger.error(f"채널 관점 데이터 변환 중 오류: {e}")
+                continue
         
         return channel_analyses
     
@@ -132,58 +194,76 @@ class ReportService:
         start_date = datetime.combine(target_date, datetime.min.time())
         end_date = start_date + timedelta(days=1)
         
-        # 해당 날짜의 분석 결과 가져오기
-        analyses = self.get_period_analyses(db, start_date, end_date, keywords)
-        
-        if not analyses:
+        try:
+            # 해당 날짜의 분석 결과 가져오기
+            analyses = self.get_period_analyses(db, start_date, end_date, keywords)
+            
+            if not analyses:
+                return {
+                    "report_type": "daily",
+                    "date": target_date.isoformat(),
+                    "message": "해당 날짜에 분석할 데이터가 없습니다."
+                }
+            
+            # 주요 비디오들 가져오기
+            top_videos = self.get_top_videos(db, start_date, end_date, limit=10)
+            
+            # 트렌드 분석 생성
+            trend_analysis = self.analysis_service.generate_trend_analysis(
+                analyses, keywords or [], "당일"
+            )
+            
+            # 일일 리포트 생성
+            daily_report = self.analysis_service.generate_daily_report(
+                trend_analysis, top_videos, start_date
+            )
+            
+            # 데이터베이스에 저장 시도
+            try:
+                # datetime 객체를 문자열로 변환하여 JSON 직렬화 문제 해결
+                json_safe_daily_report = self._make_json_safe(daily_report)
+                
+                report = Report(
+                    report_type="daily",
+                    title=daily_report.get('title', f"{target_date.strftime('%Y.%m.%d')} 일일 리포트"),
+                    content=json.dumps(json_safe_daily_report, ensure_ascii=False),
+                    summary=daily_report.get('executive_summary', ''),
+                    key_trends=json.dumps(trend_analysis.get('key_themes', [])),
+                    market_sentiment=trend_analysis.get('market_sentiment', 'neutral'),
+                    recommendations=json.dumps(daily_report.get('action_items', [])),
+                    date_range_start=start_date,
+                    date_range_end=end_date
+                )
+                
+                db.add(report)
+                db.commit()
+                report_id = report.id
+            except Exception as e:
+                self.logger.error(f"일일 리포트 저장 실패: {e}")
+                db.rollback()
+                report_id = None
+            
             return {
                 "report_type": "daily",
                 "date": target_date.isoformat(),
-                "message": "해당 날짜에 분석할 데이터가 없습니다."
+                "report_id": report_id,
+                "trend_analysis": trend_analysis,
+                "daily_report": daily_report,
+                "statistics": {
+                    "total_videos_analyzed": len(analyses),
+                    "total_channels": len(set([a['channel_name'] for a in analyses])),
+                    "avg_sentiment": sum([a['sentiment_score'] for a in analyses]) / len(analyses),
+                    "top_videos_count": len(top_videos)
+                }
             }
-        
-        # 주요 비디오들 가져오기
-        top_videos = self.get_top_videos(db, start_date, end_date, limit=10)
-        
-        # 트렌드 분석 생성
-        trend_analysis = self.analysis_service.generate_trend_analysis(
-            analyses, keywords or [], "당일"
-        )
-        
-        # 일일 리포트 생성
-        daily_report = self.analysis_service.generate_daily_report(
-            trend_analysis, top_videos, start_date
-        )
-        
-        # 데이터베이스에 저장
-        report = Report(
-            report_type="daily",
-            title=daily_report['title'],
-            content=json.dumps(daily_report),
-            summary=daily_report['executive_summary'],
-            key_trends=json.dumps(trend_analysis['key_themes']),
-            market_sentiment=trend_analysis['market_sentiment'],
-            recommendations=json.dumps(daily_report['action_items']),
-            date_range_start=start_date,
-            date_range_end=end_date
-        )
-        
-        db.add(report)
-        db.commit()
-        
-        return {
-            "report_type": "daily",
-            "date": target_date.isoformat(),
-            "report_id": report.id,
-            "trend_analysis": trend_analysis,
-            "daily_report": daily_report,
-            "statistics": {
-                "total_videos_analyzed": len(analyses),
-                "total_channels": len(set([a['channel_name'] for a in analyses])),
-                "avg_sentiment": sum([a['sentiment_score'] for a in analyses]) / len(analyses),
-                "top_videos_count": len(top_videos)
+            
+        except Exception as e:
+            self.logger.error(f"일일 리포트 생성 실패: {e}")
+            return {
+                "report_type": "daily",
+                "date": target_date.isoformat(),
+                "error": f"리포트 생성 중 오류가 발생했습니다: {str(e)}"
             }
-        }
     
     def generate_weekly_report(self, db: Session, end_date: datetime = None, 
                              keywords: List[str] = None) -> Dict:
@@ -194,77 +274,95 @@ class ReportService:
         
         start_date = end_date - timedelta(days=7)
         
-        # 주간 분석 결과 가져오기
-        analyses = self.get_period_analyses(db, start_date, end_date, keywords)
-        
-        if not analyses:
+        try:
+            # 주간 분석 결과 가져오기
+            analyses = self.get_period_analyses(db, start_date, end_date, keywords)
+            
+            if not analyses:
+                return {
+                    "report_type": "weekly",
+                    "period": f"{start_date.strftime('%Y.%m.%d')} - {end_date.strftime('%Y.%m.%d')}",
+                    "message": "해당 주간에 분석할 데이터가 없습니다."
+                }
+            
+            # 주요 비디오들
+            top_videos = self.get_top_videos(db, start_date, end_date, limit=15)
+            
+            # 트렌드 분석
+            trend_analysis = self.analysis_service.generate_trend_analysis(
+                analyses, keywords or [], "최근 7일"
+            )
+            
+            # 채널별 관점 비교 (주요 키워드에 대해)
+            perspective_comparisons = {}
+            if keywords:
+                for keyword in keywords[:3]:  # 상위 3개 키워드만
+                    channel_perspectives = self.get_channel_perspectives(
+                        db, [keyword], start_date, end_date
+                    )
+                    if channel_perspectives:
+                        comparison = self.analysis_service.compare_perspectives(
+                            keyword, channel_perspectives
+                        )
+                        perspective_comparisons[keyword] = comparison
+            
+            # 주간 통계
+            weekly_stats = {
+                "total_videos": len(analyses),
+                "total_channels": len(set([a['channel_name'] for a in analyses])),
+                "avg_sentiment": sum([a['sentiment_score'] for a in analyses]) / len(analyses),
+                "sentiment_distribution": {
+                    "positive": len([a for a in analyses if a['sentiment_score'] > 0.1]),
+                    "neutral": len([a for a in analyses if -0.1 <= a['sentiment_score'] <= 0.1]),
+                    "negative": len([a for a in analyses if a['sentiment_score'] < -0.1])
+                },
+                "top_entities": self._get_top_entities(analyses, 10)
+            }
+            
+            report_content = {
+                "trend_analysis": trend_analysis,
+                "perspective_comparisons": perspective_comparisons,
+                "top_videos": top_videos,
+                "weekly_statistics": weekly_stats
+            }
+            
+            # 데이터베이스에 저장 시도
+            try:
+                # datetime 객체를 문자열로 변환하여 JSON 직렬화 문제 해결
+                json_safe_content = self._make_json_safe(report_content)
+                
+                report = Report(
+                    report_type="weekly",
+                    title=f"주간 투자 인사이트 리포트 ({start_date.strftime('%Y.%m.%d')} - {end_date.strftime('%Y.%m.%d')})",
+                    content=json.dumps(json_safe_content, ensure_ascii=False),
+                    summary=trend_analysis.get('summary', ''),
+                    key_trends=json.dumps(trend_analysis.get('key_themes', [])),
+                    market_sentiment=trend_analysis.get('market_sentiment', 'neutral'),
+                    date_range_start=start_date,
+                    date_range_end=end_date
+                )
+                
+                db.add(report)
+                db.commit()
+                report_id = report.id
+            except Exception as e:
+                self.logger.error(f"주간 리포트 저장 실패: {e}")
+                db.rollback()
+                report_id = None
+            
             return {
                 "report_type": "weekly",
-                "message": "해당 주간에 분석할 데이터가 없습니다."
+                "period": f"{start_date.strftime('%Y.%m.%d')} - {end_date.strftime('%Y.%m.%d')}",
+                "report_id": report_id,
+                **report_content
             }
-        
-        # 주요 비디오들
-        top_videos = self.get_top_videos(db, start_date, end_date, limit=15)
-        
-        # 트렌드 분석
-        trend_analysis = self.analysis_service.generate_trend_analysis(
-            analyses, keywords or [], "최근 7일"
-        )
-        
-        # 채널별 관점 비교 (주요 키워드에 대해)
-        perspective_comparisons = {}
-        if keywords:
-            for keyword in keywords[:3]:  # 상위 3개 키워드만
-                channel_perspectives = self.get_channel_perspectives(
-                    db, [keyword], start_date, end_date
-                )
-                if channel_perspectives:
-                    comparison = self.analysis_service.compare_perspectives(
-                        keyword, channel_perspectives
-                    )
-                    perspective_comparisons[keyword] = comparison
-        
-        # 주간 통계
-        weekly_stats = {
-            "total_videos": len(analyses),
-            "total_channels": len(set([a['channel_name'] for a in analyses])),
-            "avg_sentiment": sum([a['sentiment_score'] for a in analyses]) / len(analyses),
-            "sentiment_distribution": {
-                "positive": len([a for a in analyses if a['sentiment_score'] > 0.1]),
-                "neutral": len([a for a in analyses if -0.1 <= a['sentiment_score'] <= 0.1]),
-                "negative": len([a for a in analyses if a['sentiment_score'] < -0.1])
-            },
-            "top_entities": self._get_top_entities(analyses, 10)
-        }
-        
-        report_content = {
-            "trend_analysis": trend_analysis,
-            "perspective_comparisons": perspective_comparisons,
-            "top_videos": top_videos,
-            "weekly_statistics": weekly_stats
-        }
-        
-        # 데이터베이스에 저장
-        report = Report(
-            report_type="weekly",
-            title=f"주간 투자 인사이트 리포트 ({start_date.strftime('%Y.%m.%d')} - {end_date.strftime('%Y.%m.%d')})",
-            content=json.dumps(report_content),
-            summary=trend_analysis['summary'],
-            key_trends=json.dumps(trend_analysis['key_themes']),
-            market_sentiment=trend_analysis['market_sentiment'],
-            date_range_start=start_date,
-            date_range_end=end_date
-        )
-        
-        db.add(report)
-        db.commit()
-        
-        return {
-            "report_type": "weekly",
-            "period": f"{start_date.strftime('%Y.%m.%d')} - {end_date.strftime('%Y.%m.%d')}",
-            "report_id": report.id,
-            **report_content
-        }
+            
+        except Exception as e:
+            self.logger.error(f"주간 리포트 생성 실패: {e}")
+            return {
+                "report_type": "weekly",
+                "error": f"리포트 생성 중 오류가 발생했습니다: {str(e)}"
+            }
     
     def generate_perspective_comparison_report(self, db: Session, topic: str, 
                                              keywords: List[str], days_back: int = 7) -> Dict:
@@ -353,4 +451,15 @@ class ReportService:
             "market_sentiment": report.market_sentiment,
             "date_range": f"{report.date_range_start.strftime('%Y.%m.%d')} - {report.date_range_end.strftime('%Y.%m.%d')}",
             "created_at": report.created_at.isoformat()
-        } for report in reports] 
+        } for report in reports]
+
+    def _make_json_safe(self, data):
+        """datetime 객체를 문자열로 변환하여 JSON 직렬화 문제 해결"""
+        if isinstance(data, datetime):
+            return data.isoformat()
+        elif isinstance(data, dict):
+            return {key: self._make_json_safe(value) for key, value in data.items()}
+        elif isinstance(data, list):
+            return [self._make_json_safe(item) for item in data]
+        else:
+            return data 

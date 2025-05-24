@@ -261,13 +261,28 @@ class TelegramBotService:
             
             if report.get('error'):
                 await update.message.reply_text(f"❌ {report['error']}")
+            elif report.get('message'):
+                # 데이터가 없는 경우
+                await update.message.reply_text(
+                    f"ℹ️ {report['message']}\n\n"
+                    "💡 새로운 비디오가 분석되면 리포트를 생성할 수 있습니다."
+                )
             else:
                 message = self._format_daily_report(report)
-                await update.message.reply_text(message, parse_mode='Markdown')
+                # 메시지가 너무 길면 나누어서 전송
+                if len(message) > 4000:
+                    parts = self._split_message(message, 4000)
+                    for part in parts:
+                        await update.message.reply_text(part, parse_mode='Markdown')
+                else:
+                    await update.message.reply_text(message, parse_mode='Markdown')
                 
         except Exception as e:
             self.logger.error(f"일일 리포트 오류: {e}")
-            await update.message.reply_text("❌ 리포트 생성 중 오류가 발생했습니다.")
+            await update.message.reply_text(
+                "❌ 리포트 생성 중 오류가 발생했습니다.\n"
+                "잠시 후 다시 시도해주세요."
+            )
         finally:
             db.close()
     
@@ -281,13 +296,28 @@ class TelegramBotService:
             
             if report.get('error'):
                 await update.message.reply_text(f"❌ {report['error']}")
+            elif report.get('message'):
+                # 데이터가 없는 경우
+                await update.message.reply_text(
+                    f"ℹ️ {report['message']}\n\n"
+                    "💡 지난 7일간 분석된 비디오가 있어야 주간 리포트를 생성할 수 있습니다."
+                )
             else:
                 message = self._format_weekly_report(report)
-                await update.message.reply_text(message, parse_mode='Markdown')
+                # 메시지가 너무 길면 나누어서 전송
+                if len(message) > 4000:
+                    parts = self._split_message(message, 4000)
+                    for part in parts:
+                        await update.message.reply_text(part, parse_mode='Markdown')
+                else:
+                    await update.message.reply_text(message, parse_mode='Markdown')
                 
         except Exception as e:
             self.logger.error(f"주간 리포트 오류: {e}")
-            await update.message.reply_text("❌ 리포트 생성 중 오류가 발생했습니다.")
+            await update.message.reply_text(
+                "❌ 리포트 생성 중 오류가 발생했습니다.\n"
+                "잠시 후 다시 시도해주세요."
+            )
         finally:
             db.close()
     
@@ -366,29 +396,88 @@ class TelegramBotService:
         """자연어 텍스트 처리"""
         user_text = update.message.text.lower()
         
-        # 간단한 키워드 매칭으로 의도 파악
-        if any(word in user_text for word in ['주식', '증시', '코스피', '나스닥']):
-            await self.keyword_command(update, type('Args', (), {'args': ['주식']})())
-        elif any(word in user_text for word in ['부동산', '집값', '아파트']):
-            await self.keyword_command(update, type('Args', (), {'args': ['부동산']})())
-        elif any(word in user_text for word in ['금리', '기준금리', '금융통화위원회']):
-            await self.keyword_command(update, type('Args', (), {'args': ['금리']})())
-        elif any(word in user_text for word in ['오늘', '일일', '데일리']):
-            await self.daily_command(update, context)
-        elif any(word in user_text for word in ['주간', '위클리', '이번주']):
-            await self.weekly_command(update, context)
-        elif any(word in user_text for word in ['핫', '인기', '트렌드']):
-            await self.hot_keywords_command(update, context)
-        else:
-            # 일반적인 응답
+        self.logger.info(f"자연어 처리: '{user_text}'")
+        
+        try:
+            # 간단한 키워드 매칭으로 의도 파악
+            if any(word in user_text for word in ['주식', '증시', '코스피', '나스닥', '주식시장']):
+                # context 객체 생성하여 전달
+                mock_context = type('Context', (), {'args': ['주식']})()
+                await self.keyword_command(update, mock_context)
+                return
+                
+            elif any(word in user_text for word in ['부동산', '집값', '아파트', '부동산시장']):
+                mock_context = type('Context', (), {'args': ['부동산']})()
+                await self.keyword_command(update, mock_context)
+                return
+                
+            elif any(word in user_text for word in ['금리', '기준금리', '금융통화위원회', '금리인상', '금리인하']):
+                mock_context = type('Context', (), {'args': ['금리']})()
+                await self.keyword_command(update, mock_context)
+                return
+                
+            elif any(word in user_text for word in ['달러', '환율', '원달러', '달러강세', '달러약세']):
+                mock_context = type('Context', (), {'args': ['달러']})()
+                await self.keyword_command(update, mock_context)
+                return
+                
+            elif any(word in user_text for word in ['오늘', '일일', '데일리', '투자', '시장']):
+                await self.daily_command(update, context)
+                return
+                
+            elif any(word in user_text for word in ['주간', '위클리', '이번주', '일주일']):
+                await self.weekly_command(update, context)
+                return
+                
+            elif any(word in user_text for word in ['핫', '인기', '트렌드', '화제']):
+                await self.hot_keywords_command(update, context)
+                return
+                
+            elif any(word in user_text for word in ['트렌드', '최근', '추세']):
+                await self.trend_command(update, context)
+                return
+                
+            # 채널 관련 질문
+            elif any(word in user_text for word in ['체슬리', '체슬리tv']):
+                mock_context = type('Context', (), {'args': ['체슬리TV']})()
+                await self.channel_command(update, mock_context)
+                return
+                
+            # 인물 관련 질문
+            elif any(word in user_text for word in ['박세익', '오건영', '홍춘욱', '김준송']):
+                for name in ['박세익', '오건영', '홍춘욱', '김준송']:
+                    if name in user_text:
+                        mock_context = type('Context', (), {'args': [name]})()
+                        await self.influencer_command(update, mock_context)
+                        return
+            
+            # 기본 응답
             suggestions = [
-                "💡 다음 명령어들을 사용해보세요:",
-                "• `/keyword 주식` - 주식 관련 분석",
-                "• `/daily` - 오늘의 리포트", 
-                "• `/hot` - 핫한 키워드",
-                "• `/help` - 전체 사용법"
+                "💡 **자연어로 이렇게 질문해보세요:**",
+                "",
+                "🔍 **키워드 분석:**",
+                "• '오늘 주식 시장 어때?'",
+                "• '부동산 소식 알려줘'", 
+                "• '금리 관련 분석해줘'",
+                "",
+                "📊 **리포트 요청:**",
+                "• '오늘 리포트 보여줘'",
+                "• '핫한 키워드 알려줘'",
+                "• '최근 트렌드는?'",
+                "",
+                "📺 **채널 분석:**",
+                "• '체슬리TV 최근 영상은?'",
+                "",
+                "👤 **인물 분석:**",
+                "• '박세익 최근 언급은?'",
+                "",
+                "❓ **명령어:** `/help`"
             ]
             await update.message.reply_text('\n'.join(suggestions), parse_mode='Markdown')
+            
+        except Exception as e:
+            self.logger.error(f"자연어 처리 오류: {e}")
+            await update.message.reply_text("❌ 처리 중 오류가 발생했습니다. `/help`를 참고해주세요.")
     
     def _format_keyword_report(self, report: Dict) -> str:
         """키워드 리포트 포맷팅"""
@@ -474,14 +563,18 @@ class TelegramBotService:
     
     def _format_daily_report(self, report: Dict) -> str:
         """일일 리포트 포맷팅"""
+        date = report.get('date', datetime.now().strftime('%Y-%m-%d'))
         daily_report = report.get('daily_report', {})
+        trend_analysis = report.get('trend_analysis', {})
         stats = report.get('statistics', {})
         
-        message = f"📊 **오늘의 투자 인사이트**\n\n"
+        message = f"📊 **일일 투자 인사이트** ({date})\n\n"
         
         # 핵심 요약
-        if 'executive_summary' in daily_report:
+        if daily_report.get('executive_summary'):
             message += f"💡 **핵심 요약**\n{daily_report['executive_summary']}\n\n"
+        elif trend_analysis.get('summary'):
+            message += f"💡 **핵심 요약**\n{trend_analysis['summary']}\n\n"
         
         # 통계
         message += f"📈 **오늘의 통계**\n"
@@ -489,42 +582,82 @@ class TelegramBotService:
         message += f"• 분석 채널: {stats.get('total_channels', 0)}개\n"
         message += f"• 평균 감정: {stats.get('avg_sentiment', 0):.2f}\n\n"
         
-        # 주요 하이라이트
-        if 'market_highlights' in daily_report:
+        # 시장 감정
+        sentiment = trend_analysis.get('market_sentiment', 'neutral')
+        if isinstance(sentiment, str):
+            sentiment_emoji = {"bullish": "📈", "bearish": "📉", "neutral": "➖"}.get(sentiment, "➖")
+            message += f"💭 **시장 감정**: {sentiment_emoji} {sentiment.title()}\n\n"
+        
+        # 주요 하이라이트 또는 테마
+        if daily_report.get('market_highlights'):
             message += f"🎯 **주요 하이라이트**\n"
             for highlight in daily_report['market_highlights'][:3]:
                 message += f"• {highlight}\n"
             message += "\n"
+        elif trend_analysis.get('key_themes'):
+            message += f"🎯 **주요 테마**\n"
+            for theme in trend_analysis['key_themes'][:3]:
+                message += f"• {theme}\n"
+            message += "\n"
         
         # 내일 전망
-        if 'tomorrow_outlook' in daily_report:
-            message += f"🔮 **내일 전망**\n{daily_report['tomorrow_outlook']}\n"
+        if daily_report.get('tomorrow_outlook'):
+            message += f"🔮 **내일 전망**\n{daily_report['tomorrow_outlook']}\n\n"
+        
+        # 실행 가능한 인사이트
+        if daily_report.get('action_items'):
+            message += f"📋 **실행 포인트**\n"
+            for action in daily_report['action_items'][:2]:
+                message += f"• {action}\n"
         
         return message
     
     def _format_weekly_report(self, report: Dict) -> str:
         """주간 리포트 포맷팅"""
+        period = report.get('period', '최근 7일')
         trend_analysis = report.get('trend_analysis', {})
         stats = report.get('weekly_statistics', {})
         
-        message = f"📈 **주간 투자 인사이트**\n\n"
+        message = f"📈 **주간 투자 인사이트**\n📅 {period}\n\n"
         
         # 주간 요약
-        if 'summary' in trend_analysis:
+        if trend_analysis.get('summary'):
             message += f"📝 **주간 요약**\n{trend_analysis['summary']}\n\n"
         
-        # 핫 키워드
-        if 'top_entities' in stats:
+        # 주간 통계
+        message += f"📊 **주간 통계**\n"
+        message += f"• 분석 영상: {stats.get('total_videos', 0)}개\n"
+        message += f"• 분석 채널: {stats.get('total_channels', 0)}개\n"
+        message += f"• 평균 감정: {stats.get('avg_sentiment', 0):.2f}\n\n"
+        
+        # 감정 분포
+        if stats.get('sentiment_distribution'):
+            sentiment_dist = stats['sentiment_distribution']
+            message += f"💭 **감정 분포**\n"
+            message += f"• 긍정적: {sentiment_dist.get('positive', 0)}개\n"
+            message += f"• 중립적: {sentiment_dist.get('neutral', 0)}개\n"
+            message += f"• 부정적: {sentiment_dist.get('negative', 0)}개\n\n"
+        
+        # 핫 엔티티
+        if stats.get('top_entities'):
             message += f"🔥 **핫 키워드 TOP 5**\n"
             for i, entity in enumerate(stats['top_entities'][:5], 1):
                 message += f"{i}. {entity['entity']} ({entity['count']}회)\n"
             message += "\n"
         
         # 주요 테마
-        if 'key_themes' in trend_analysis:
+        if trend_analysis.get('key_themes'):
             message += f"🎯 **주요 테마**\n"
-            for theme in trend_analysis['key_themes'][:3]:
+            for theme in trend_analysis['key_themes'][:4]:
                 message += f"• {theme}\n"
+            message += "\n"
+        
+        # 시장 전망
+        if trend_analysis.get('market_sentiment'):
+            sentiment = trend_analysis['market_sentiment']
+            if isinstance(sentiment, str):
+                sentiment_emoji = {"bullish": "📈", "bearish": "📉", "neutral": "➖"}.get(sentiment, "➖")
+                message += f"🔮 **시장 전망**: {sentiment_emoji} {sentiment.title()}\n"
         
         return message
     
@@ -606,6 +739,38 @@ class TelegramBotService:
                     message += f"• {theme} ({count}회)\n"
         
         return message
+    
+    def _split_message(self, message: str, max_length: int = 4000) -> List[str]:
+        """긴 메시지를 여러 부분으로 나눕니다."""
+        if len(message) <= max_length:
+            return [message]
+        
+        parts = []
+        lines = message.split('\n')
+        current_part = ""
+        
+        for line in lines:
+            # 현재 줄을 추가했을 때 길이가 초과하는지 확인
+            if len(current_part + line + '\n') > max_length:
+                if current_part:  # 현재 파트가 비어있지 않으면 저장
+                    parts.append(current_part.rstrip())
+                    current_part = ""
+                
+                # 한 줄이 너무 긴 경우 강제로 자름
+                if len(line) > max_length:
+                    while line:
+                        parts.append(line[:max_length])
+                        line = line[max_length:]
+                else:
+                    current_part = line + '\n'
+            else:
+                current_part += line + '\n'
+        
+        # 마지막 파트 추가
+        if current_part:
+            parts.append(current_part.rstrip())
+        
+        return parts
     
     def run_bot(self):
         """봇을 실행합니다."""
