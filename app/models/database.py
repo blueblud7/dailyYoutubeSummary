@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float, Boolean, ForeignKey, JSON
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float, Boolean, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
@@ -52,7 +52,6 @@ class Video(Base):
     # 관계 설정
     channel = relationship("Channel", back_populates="videos")
     transcript = relationship("Transcript", back_populates="video", uselist=False)
-    video_analysis = relationship("VideoAnalysis", back_populates="video", uselist=False)
     analysis = relationship("Analysis", back_populates="video")
 
 class Transcript(Base):
@@ -61,7 +60,6 @@ class Transcript(Base):
     id = Column(Integer, primary_key=True, index=True)
     video_id = Column(String, ForeignKey("videos.video_id"), unique=True)
     transcript_text = Column(Text)
-    transcript_length = Column(Integer)  # 자막 길이
     is_auto_generated = Column(Boolean, default=False)
     language = Column(String, default="ko")
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -69,45 +67,6 @@ class Transcript(Base):
     
     # 관계 설정
     video = relationship("Video", back_populates="transcript")
-
-class VideoAnalysis(Base):
-    """포괄적인 AI 영상 분석 결과를 저장하는 테이블"""
-    __tablename__ = "video_analyses"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    video_id = Column(String, ForeignKey("videos.video_id"), unique=True, index=True)
-    
-    # 기본 분석 정보
-    executive_summary = Column(Text)  # 종합 요약
-    sentiment = Column(String)  # positive/negative/neutral/mixed
-    importance_score = Column(Float)  # 0.0-1.0
-    confidence_level = Column(Float)  # 0.0-1.0
-    
-    # 상세 분석 (JSON 형태로 저장)
-    detailed_insights = Column(Text)  # JSON: 구체적인 인사이트 리스트
-    market_analysis = Column(Text)  # JSON: 시장 분석 (현재상황, 미래전망, 리스크, 기회)
-    investment_implications = Column(Text)  # JSON: 투자 시사점
-    key_data_points = Column(Text)  # JSON: 핵심 데이터 포인트
-    expert_opinions = Column(Text)  # JSON: 전문가 의견
-    historical_context = Column(Text)  # 역사적 맥락
-    actionable_steps = Column(Text)  # JSON: 실행 가능한 단계
-    
-    # 메타데이터
-    topics = Column(Text)  # JSON: 주요 키워드
-    related_companies = Column(Text)  # JSON: 관련 기업들
-    economic_indicators = Column(Text)  # JSON: 경제지표들
-    time_sensitive_info = Column(Text)  # 시간 민감 정보
-    
-    # AI 모델 정보
-    ai_model_used = Column(String)  # 사용된 AI 모델
-    analysis_version = Column(String, default="1.0")  # 분석 버전
-    
-    # 시간 정보
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # 관계 설정
-    video = relationship("Video", back_populates="video_analysis")
 
 class Keyword(Base):
     __tablename__ = "keywords"
@@ -136,20 +95,6 @@ class Analysis(Base):
     # 관계 설정
     video = relationship("Video", back_populates="analysis")
     keyword = relationship("Keyword", back_populates="analyses")
-
-class AnalysisCache(Base):
-    """분석 캐시 관리를 위한 테이블"""
-    __tablename__ = "analysis_cache"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    video_id = Column(String, ForeignKey("videos.video_id"), unique=True, index=True)
-    cache_key = Column(String, index=True)  # 캐시 키 (video_id + transcript_hash)
-    is_valid = Column(Boolean, default=True)  # 캐시 유효성
-    ai_model_version = Column(String)  # AI 모델 버전
-    last_accessed = Column(DateTime, default=datetime.utcnow)
-    access_count = Column(Integer, default=1)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class Report(Base):
     __tablename__ = "reports"
