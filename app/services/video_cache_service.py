@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 from sqlalchemy import and_, or_
 
 from app.models.database import (
-    SessionLocal, Video, Transcript, VideoAnalysis, 
-    AnalysisCache, Channel, create_tables
+    SessionLocal, Video, Transcript, Analysis, 
+    Channel, create_tables
 )
 
 class VideoCacheService:
@@ -95,7 +95,7 @@ class VideoCacheService:
         db = SessionLocal()
         try:
             # 기존 분석 결과 확인
-            existing_analysis = db.query(VideoAnalysis).filter(VideoAnalysis.video_id == video_id).first()
+            existing_analysis = db.query(Analysis).filter(Analysis.video_id == video_id).first()
             
             detailed_analysis = analysis_result.get('detailed_analysis', {})
             
@@ -104,7 +104,7 @@ class VideoCacheService:
                 self._update_analysis(existing_analysis, analysis_result, detailed_analysis, ai_model)
             else:
                 # 새로운 분석 생성
-                video_analysis = VideoAnalysis(
+                video_analysis = Analysis(
                     video_id=video_id,
                     executive_summary=detailed_analysis.get('executive_summary', analysis_result.get('summary', '')),
                     sentiment=analysis_result.get('sentiment', 'neutral'),
@@ -134,8 +134,7 @@ class VideoCacheService:
             
             db.commit()
             
-            # 캐시 정보 업데이트
-            self._update_cache_info(db, video_id, ai_model)
+            # 캐시 정보 업데이트 (AnalysisCache 모델이 없으므로 생략)
             
             return True
             
@@ -146,7 +145,7 @@ class VideoCacheService:
         finally:
             db.close()
     
-    def _update_analysis(self, existing_analysis: VideoAnalysis, analysis_result: Dict, detailed_analysis: Dict, ai_model: str):
+    def _update_analysis(self, existing_analysis: Analysis, analysis_result: Dict, detailed_analysis: Dict, ai_model: str):
         """기존 분석 결과 업데이트"""
         existing_analysis.executive_summary = detailed_analysis.get('executive_summary', analysis_result.get('summary', ''))
         existing_analysis.sentiment = analysis_result.get('sentiment', 'neutral')
@@ -173,48 +172,20 @@ class VideoCacheService:
         existing_analysis.updated_at = datetime.utcnow()
     
     def _update_cache_info(self, db: Session, video_id: str, ai_model: str):
-        """캐시 정보 업데이트"""
-        # 자막 가져오기
-        transcript = db.query(Transcript).filter(Transcript.video_id == video_id).first()
-        if not transcript:
-            return
-        
-        cache_key = self._generate_cache_key(video_id, transcript.transcript_text)
-        
-        existing_cache = db.query(AnalysisCache).filter(AnalysisCache.video_id == video_id).first()
-        
-        if existing_cache:
-            existing_cache.cache_key = cache_key
-            existing_cache.ai_model_version = ai_model
-            existing_cache.last_accessed = datetime.utcnow()
-            existing_cache.access_count += 1
-            existing_cache.updated_at = datetime.utcnow()
-        else:
-            cache = AnalysisCache(
-                video_id=video_id,
-                cache_key=cache_key,
-                ai_model_version=ai_model
-            )
-            db.add(cache)
-        
-        db.commit()
+        """캐시 정보 업데이트 (AnalysisCache 모델이 없으므로 생략)"""
+        pass
     
     def get_cached_analysis(self, video_id: str) -> Optional[Dict]:
         """캐시된 분석 결과 가져오기"""
         db = SessionLocal()
         try:
             # 분석 결과 조회
-            analysis = db.query(VideoAnalysis).filter(VideoAnalysis.video_id == video_id).first()
+            analysis = db.query(Analysis).filter(Analysis.video_id == video_id).first()
             
             if not analysis:
                 return None
             
-            # 캐시 정보 업데이트 (접근 시간, 접근 횟수)
-            cache = db.query(AnalysisCache).filter(AnalysisCache.video_id == video_id).first()
-            if cache:
-                cache.last_accessed = datetime.utcnow()
-                cache.access_count += 1
-                db.commit()
+            # 캐시 정보 업데이트 (AnalysisCache 모델이 없으므로 생략)
             
             # 분석 결과를 원래 형식으로 변환
             return self._convert_db_to_analysis_format(analysis)
@@ -225,7 +196,7 @@ class VideoCacheService:
         finally:
             db.close()
     
-    def _convert_db_to_analysis_format(self, analysis: VideoAnalysis) -> Dict:
+    def _convert_db_to_analysis_format(self, analysis: Analysis) -> Dict:
         """DB 분석 결과를 원래 형식으로 변환"""
         try:
             detailed_analysis = {
@@ -273,7 +244,7 @@ class VideoCacheService:
         """분석 결과가 캐시되어 있는지 확인"""
         db = SessionLocal()
         try:
-            analysis = db.query(VideoAnalysis).filter(VideoAnalysis.video_id == video_id).first()
+            analysis = db.query(Analysis).filter(Analysis.video_id == video_id).first()
             return analysis is not None
         except Exception as e:
             self.logger.error(f"캐시 확인 실패: {e}")
@@ -309,26 +280,22 @@ class VideoCacheService:
             db.close()
     
     def clean_old_cache(self, days_old: int = 30) -> int:
-        """오래된 캐시 정리"""
+        """오래된 캐시 정리 (AnalysisCache 모델이 없으므로 Analysis만 정리)"""
         db = SessionLocal()
         try:
             cutoff_date = datetime.utcnow() - timedelta(days=days_old)
             
-            old_caches = db.query(AnalysisCache).filter(
-                AnalysisCache.last_accessed < cutoff_date
+            old_analyses = db.query(Analysis).filter(
+                Analysis.created_at < cutoff_date
             ).all()
             
-            count = len(old_caches)
+            count = len(old_analyses)
             
-            for cache in old_caches:
-                # 관련 분석 결과도 삭제
-                analysis = db.query(VideoAnalysis).filter(VideoAnalysis.video_id == cache.video_id).first()
-                if analysis:
-                    db.delete(analysis)
-                db.delete(cache)
+            for analysis in old_analyses:
+                db.delete(analysis)
             
             db.commit()
-            self.logger.info(f"오래된 캐시 {count}개 정리 완료")
+            self.logger.info(f"오래된 분석 {count}개 정리 완료")
             return count
             
         except Exception as e:
@@ -343,13 +310,13 @@ class VideoCacheService:
         db = SessionLocal()
         try:
             total_videos = db.query(Video).count()
-            cached_analyses = db.query(VideoAnalysis).count()
+            cached_analyses = db.query(Analysis).count()
             total_transcripts = db.query(Transcript).count()
             
             # 최근 1주일 분석
             week_ago = datetime.utcnow() - timedelta(days=7)
-            recent_analyses = db.query(VideoAnalysis).filter(
-                VideoAnalysis.created_at >= week_ago
+            recent_analyses = db.query(Analysis).filter(
+                Analysis.created_at >= week_ago
             ).count()
             
             # 캐시 히트율 계산

@@ -214,6 +214,7 @@ class YouTubeService:
                 video_info = {
                     'video_id': video['id'],
                     'channel_id': video['snippet']['channelId'],
+                    'channel_name': video['snippet']['channelTitle'],
                     'title': video['snippet']['title'],
                     'description': video['snippet']['description'],
                     'published_at': published_at,

@@ -47,14 +47,12 @@ def collect_subscription_updates():
                     logger.info(f"   ✅ {len(videos)}개 새 영상 발견")
                     total_new_videos += len(videos)
                     
-                    # 수집된 비디오들 자막 및 분석 진행
-                    for video in videos:
-                        try:
-                            # 자막 수집
-                            data_collector.collect_video_transcript(video.video_id, db)
-                            logger.info(f"   📝 자막 수집: {video.title[:50]}...")
-                        except Exception as e:
-                            logger.warning(f"   ⚠️ 자막 수집 실패: {e}")
+                    # 수집된 비디오들 자막 수집
+                    try:
+                        transcripts = data_collector.collect_video_transcripts(videos, db)
+                        logger.info(f"   📝 자막 수집 완료: {len(transcripts)}개")
+                    except Exception as e:
+                        logger.warning(f"   ⚠️ 자막 수집 실패: {e}")
                             
                     # 키워드별 분석 수행
                     default_keywords = [

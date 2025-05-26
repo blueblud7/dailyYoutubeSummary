@@ -9,7 +9,7 @@ from pathlib import Path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-from app.services.telegram_bot_service import telegram_bot
+from simple_telegram_bot_manager import SimpleTelegramBotManager
 from dotenv import load_dotenv
 
 def main():
@@ -40,25 +40,22 @@ def main():
         logger.info("3. 봇과 대화를 시작하고 /start 명령 실행")
         return
     
-    logger.info("🤖 투자 인사이트 텔레그램 봇 시작!")
+    logger.info("🤖 투자 분석 텔레그램 봇 (버튼 포함) 시작!")
     logger.info("="*50)
-    logger.info("📱 사용 가능한 명령어:")
-    logger.info("• /start - 봇 시작")
-    logger.info("• /help - 사용법 안내")
-    logger.info("• /keyword [키워드] - 키워드 분석")
-    logger.info("• /channel [채널명] - 채널 분석")
-    logger.info("• /influencer [인물명] - 인플루언서 언급 분석")
-    logger.info("• /daily - 일일 리포트")
-    logger.info("• /weekly - 주간 리포트")
-    logger.info("• /hot - 핫한 키워드")
-    logger.info("• /trend - 트렌드 분석")
-    logger.info("• /multi [키워드] [채널] [인물] - 다차원 분석")
+    logger.info("📱 사용 가능한 기능:")
+    logger.info("• /start - 봇 시작 (인라인 버튼 메뉴)")
+    logger.info("• 📺 채널 구독 관리")
+    logger.info("• 🔍 키워드 관리")
+    logger.info("• 🔎 키워드 검색 (등록 안 된 것도 검색 가능)")
+    logger.info("• 📊 정기 분석 실행")
+    logger.info("• 🎬 YouTube URL 즉시 요약")
     logger.info("="*50)
     logger.info("봇을 중지하려면 Ctrl+C를 누르세요.")
     
     try:
-        # 봇 실행
-        telegram_bot.run_bot()
+        # 간단한 봇 관리자 실행
+        bot_manager = SimpleTelegramBotManager()
+        bot_manager.run()
     except KeyboardInterrupt:
         logger.info("🛑 사용자에 의해 봇이 중지되었습니다.")
     except Exception as e:

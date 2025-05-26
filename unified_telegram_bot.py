@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
 """
-텔레그램 봇을 통한 구독 채널 및 키워드 관리 + YouTube URL 요약 + 키워드 검색
+통합 텔레그램 봇 - 모든 기능 포함
+YouTube URL 요약, 채널/키워드 관리, AI 분석 등
 """
 
 import os
 import logging
 import json
 import re
-from typing import Dict, List
+from typing import Dict, List, Optional
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
@@ -17,8 +18,10 @@ from telegram.ext import (
     MessageHandler, filters, ContextTypes
 )
 
-from app.models.database import SessionLocal, Channel, Keyword, create_tables
-# from smart_subscription_reporter_v2 import SmartSubscriptionReporterV2  # 임시 비활성화
+# 데이터베이스 및 서비스 import
+from app.models.database import SessionLocal, Channel, Keyword, Video, Transcript, Analysis, create_tables
+from app.services.youtube_service import YouTubeService
+from app.services.analysis_service import AnalysisService
 
 # 로깅 설정
 logging.basicConfig(
@@ -29,15 +32,17 @@ logger = logging.getLogger(__name__)
 
 load_dotenv('config.env')
 
-class TelegramBotManager:
+class UnifiedTelegramBot:
     def __init__(self):
         self.token = os.getenv("TELEGRAM_BOT_TOKEN")
         self.authorized_chat_id = os.getenv("TELEGRAM_CHAT_ID")
-        # self.reporter = SmartSubscriptionReporterV2()  # 임시 비활성화
-        self.reporter = None
         
         if not self.token:
             raise ValueError("TELEGRAM_BOT_TOKEN이 설정되지 않았습니다.")
+        
+        # 서비스 초기화
+        self.youtube_service = YouTubeService()
+        self.analysis_service = AnalysisService()
         
         # 테이블 생성 확인
         create_tables()
@@ -67,7 +72,6 @@ class TelegramBotManager:
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """봇 시작 명령어"""
         if not self.is_authorized(update):
-            # 메시지 타입에 따라 적절한 응답 방법 선택
             if update.callback_query:
                 await update.callback_query.answer("❌ 인증되지 않은 사용자입니다.")
                 return
@@ -86,30 +90,28 @@ class TelegramBotManager:
         
         welcome_text = (
             "🤖 **투자 분석 봇에 오신 것을 환영합니다!**\n\n"
-            "🔥 **새로운 기능:** YouTube URL을 보내주시면 자동으로 요약해드립니다!\n\n"
+            "🔥 **새로운 기능:** YouTube URL을 보내주시면 자동으로 AI가 요약해드립니다!\n\n"
             "**사용 가능한 기능:**\n"
-            "• 📺 채널 구독 관리\n"
-            "• 🔍 키워드 관리\n"
+            "• 📺 채널 구독 관리 (추가/삭제)\n"
+            "• 🔍 키워드 관리 (추가/삭제)\n"
             "• 🔎 키워드 검색 (등록 안 된 것도 검색 가능)\n"
             "• 📊 정기 분석 실행\n"
             "• 🎬 YouTube URL 즉시 요약\n\n"
             "**YouTube URL 지원 형식:**\n"
             "• `https://youtube.com/watch?v=VIDEO_ID`\n"
             "• `https://youtu.be/VIDEO_ID`\n"
-            "• `https://youtube.com/shorts/VIDEO_ID`"
+            "• `https://youtube.com/shorts/VIDEO_ID`\n\n"
+            "💡 **사용법:** 버튼을 클릭하거나 YouTube URL을 그냥 보내주세요!"
         )
         
-        # 메시지 타입에 따라 적절한 응답 방법 선택
         try:
             if update.callback_query:
-                # 인라인 키보드에서 호출된 경우
                 await update.callback_query.edit_message_text(
                     welcome_text,
                     reply_markup=reply_markup,
                     parse_mode='Markdown'
                 )
             elif update.message:
-                # 일반 메시지에서 호출된 경우
                 await update.message.reply_text(
                     welcome_text,
                     reply_markup=reply_markup,
@@ -117,11 +119,6 @@ class TelegramBotManager:
                 )
         except Exception as e:
             logger.error(f"start 메서드에서 오류 발생: {e}")
-            # fallback 응답
-            if update.callback_query:
-                await update.callback_query.answer("메뉴 로딩 중 오류가 발생했습니다.")
-            elif update.message:
-                await update.message.reply_text("메뉴 로딩 중 오류가 발생했습니다.")
     
     async def button_handler(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """인라인 키보드 버튼 처리"""
@@ -155,7 +152,7 @@ class TelegramBotManager:
         elif query.data.startswith("del_kw_"):
             await self.remove_keyword(update, context)
         elif query.data == "back_main":
-            await self.start(update, context)  # 이제 정상 작동합니다
+            await self.start(update, context)
     
     async def show_channel_menu(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """채널 관리 메뉴 표시"""
@@ -190,16 +187,7 @@ class TelegramBotManager:
         db.close()
         
         if keywords:
-            # 카테고리별로 정리
-            categories = {}
-            for kw in keywords:
-                if kw.category not in categories:
-                    categories[kw.category] = []
-                categories[kw.category].append(kw.keyword)
-            
-            keyword_list = ""
-            for category, kw_list in categories.items():
-                keyword_list += f"**{category}**: {', '.join(kw_list)}\n"
+            keyword_list = "\n".join([f"• {kw.keyword} ({kw.category})" for kw in keywords])
         else:
             keyword_list = "등록된 키워드가 없습니다."
         
@@ -241,7 +229,6 @@ class TelegramBotManager:
             parse_mode='Markdown'
         )
         
-        # 다음 메시지를 키워드 검색으로 처리하도록 상태 저장
         context.user_data['action'] = 'keyword_search'
     
     async def add_channel_prompt(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -265,7 +252,6 @@ class TelegramBotManager:
             parse_mode='Markdown'
         )
         
-        # 다음 메시지를 채널 추가로 처리하도록 상태 저장
         context.user_data['action'] = 'add_channel'
     
     async def show_remove_channel_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -449,176 +435,9 @@ class TelegramBotManager:
                 "• 채널명/키워드 입력 (메뉴에서 선택 후)"
             )
     
-    async def process_keyword_search(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """키워드 검색 처리 - 등록되지 않은 키워드도 검색 가능"""
-        keyword = update.message.text.strip()
-        
-        if not keyword:
-            await update.message.reply_text("❌ 키워드를 입력해주세요.")
-            return
-        
-        # 진행 상황 메시지
-        progress_msg = await update.message.reply_text(
-            f"🔍 **'{keyword}' 키워드 검색 중...**\n\n"
-            "📹 최근 영상들에서 해당 키워드를 검색하고 있습니다...\n"
-            "⏳ 잠시만 기다려주세요."
-        )
-        
-        try:
-            # 최근 영상들 검색
-            search_results = await self.search_keyword_in_videos(keyword)
-            
-            if search_results:
-                await self.send_keyword_search_results(update, keyword, search_results, progress_msg)
-            else:
-                await progress_msg.edit_text(
-                    f"🔍 **'{keyword}' 검색 결과**\n\n"
-                    f"❌ 최근 영상에서 '{keyword}' 관련 내용을 찾을 수 없습니다.\n\n"
-                    "💡 **제안:**\n"
-                    "• 다른 키워드로 검색해보세요\n"
-                    "• 더 일반적인 용어를 사용해보세요\n"
-                    "• 영어나 한글로 다시 검색해보세요"
-                )
-                
-        except Exception as e:
-            logger.error(f"키워드 검색 중 오류: {e}")
-            await progress_msg.edit_text(
-                f"❌ **키워드 검색 중 오류가 발생했습니다.**\n\n"
-                f"오류 내용: {str(e)}"
-            )
-        
-        # 상태 초기화
-        context.user_data.pop('action', None)
-    
-    async def search_keyword_in_videos(self, keyword: str) -> List[Dict]:
-        """최근 영상들에서 키워드 검색"""
-        db = SessionLocal()
-        try:
-            # 최근 7일간의 영상들 가져오기
-            from app.models.database import Video, VideoAnalysis
-            from datetime import datetime, timedelta
-            
-            recent_date = datetime.now() - timedelta(days=7)
-            
-            # 영상과 분석 정보 조인하여 가져오기
-            results = db.execute("""
-                SELECT DISTINCT v.video_id, v.title, v.published_at, v.view_count, 
-                       c.channel_name, va.executive_summary, va.detailed_insights, 
-                       va.investment_implications, va.topics
-                FROM videos v
-                JOIN channels c ON v.channel_id = c.channel_id  
-                LEFT JOIN video_analyses va ON v.video_id = va.video_id
-                WHERE v.published_at >= ?
-                ORDER BY v.published_at DESC
-                LIMIT 50
-            """, (recent_date,)).fetchall()
-            
-            matching_videos = []
-            
-            for row in results:
-                video_data = {
-                    'video_id': row[0],
-                    'title': row[1],
-                    'published_at': row[2],
-                    'view_count': row[3] or 0,
-                    'channel_name': row[4],
-                    'executive_summary': row[5] or '',
-                    'detailed_insights': row[6] or '',
-                    'investment_implications': row[7] or '',
-                    'topics': row[8] or ''
-                }
-                
-                # 키워드 매칭 확인 (제목, 요약, 인사이트, 토픽에서)
-                keyword_lower = keyword.lower()
-                search_text = f"{video_data['title']} {video_data['executive_summary']} {video_data['detailed_insights']} {video_data['topics']}".lower()
-                
-                if keyword_lower in search_text:
-                    matching_videos.append(video_data)
-            
-            return matching_videos[:10]  # 최대 10개 결과
-            
-        except Exception as e:
-            logger.error(f"키워드 검색 중 데이터베이스 오류: {e}")
-            return []
-        finally:
-            db.close()
-    
-    async def send_keyword_search_results(self, update: Update, keyword: str, results: List[Dict], progress_msg):
-        """키워드 검색 결과 전송"""
-        try:
-            if not results:
-                await progress_msg.edit_text(f"🔍 '{keyword}' 검색 결과가 없습니다.")
-                return
-            
-            # 메인 결과 메시지
-            main_text = (
-                f"🔍 **'{keyword}' 검색 결과 ({len(results)}개)**\n\n"
-                f"📅 **검색 범위:** 최근 7일\n"
-                f"📊 **매칭된 영상:** {len(results)}개\n\n"
-            )
-            
-            # 상위 3개 영상 상세 표시
-            for i, video in enumerate(results[:3], 1):
-                published_date = video['published_at'][:10] if video['published_at'] else 'Unknown'
-                
-                main_text += f"**{i}. [{video['channel_name']}] {video['title'][:60]}...**\n"
-                main_text += f"📅 {published_date} | 👀 {video['view_count']:,}회\n"
-                
-                # 요약이 있으면 표시
-                if video['executive_summary']:
-                    summary = video['executive_summary'][:150] + "..." if len(video['executive_summary']) > 150 else video['executive_summary']
-                    main_text += f"📝 {summary}\n"
-                
-                main_text += f"🔗 https://www.youtube.com/watch?v={video['video_id']}\n\n"
-            
-            # 진행 메시지 업데이트
-            await progress_msg.edit_text(
-                main_text,
-                parse_mode='Markdown'
-            )
-            
-            # 나머지 영상들 간단히 표시
-            if len(results) > 3:
-                remaining_text = f"📋 **기타 관련 영상 ({len(results)-3}개)**\n\n"
-                
-                for i, video in enumerate(results[3:], 4):
-                    published_date = video['published_at'][:10] if video['published_at'] else 'Unknown'
-                    remaining_text += f"{i}. **{video['title'][:50]}...**\n"
-                    remaining_text += f"   📺 {video['channel_name']} | 📅 {published_date}\n"
-                    remaining_text += f"   🔗 https://www.youtube.com/watch?v={video['video_id']}\n\n"
-                
-                await update.message.reply_text(
-                    remaining_text,
-                    parse_mode='Markdown'
-                )
-            
-            # 투자 시사점이 있는 영상들 따로 표시
-            investment_insights = []
-            for video in results:
-                if video['investment_implications']:
-                    investment_insights.append(video)
-            
-            if investment_insights:
-                investment_text = f"💰 **'{keyword}' 관련 투자 시사점**\n\n"
-                
-                for video in investment_insights[:3]:
-                    implications = video['investment_implications'][:200] + "..." if len(video['investment_implications']) > 200 else video['investment_implications']
-                    investment_text += f"**{video['title'][:40]}...**\n"
-                    investment_text += f"💡 {implications}\n\n"
-                
-                await update.message.reply_text(
-                    investment_text,
-                    parse_mode='Markdown'
-                )
-                
-        except Exception as e:
-            logger.error(f"검색 결과 전송 실패: {e}")
-            await update.message.reply_text(f"❌ 결과 전송 중 오류: {str(e)}")
-    
     async def process_youtube_url(self, update: Update, context: ContextTypes.DEFAULT_TYPE, video_id: str, url: str):
         """YouTube URL 처리 및 요약"""
         
-        # 진행 상황 메시지 전송
         progress_msg = await update.message.reply_text(
             "🎬 **YouTube 영상 분석 중...**\n\n"
             f"📹 영상 ID: `{video_id}`\n"
@@ -628,15 +447,7 @@ class TelegramBotManager:
         
         try:
             # 영상 정보 가져오기
-            await progress_msg.edit_text(
-                "🎬 **YouTube 영상 분석 중...**\n\n"
-                f"📹 영상 ID: `{video_id}`\n"
-                "📝 영상 정보 및 자막을 가져오는 중...",
-                parse_mode='Markdown'
-            )
-            
-            # 영상 정보 및 자막 가져오기
-            video_data = await self.get_video_data(video_id)
+            video_data = await self.get_video_info(video_id)
             
             if not video_data:
                 await progress_msg.edit_text(
@@ -649,27 +460,48 @@ class TelegramBotManager:
                 )
                 return
             
-            # AI 분석 진행
             await progress_msg.edit_text(
                 "🎬 **YouTube 영상 분석 중...**\n\n"
-                f"📹 **{video_data['title']}**\n"
+                f"📹 **{video_data['title'][:50]}...**\n"
                 f"👤 채널: {video_data['channel_name']}\n"
-                f"⏱️ 길이: {video_data['duration']}\n\n"
+                f"👀 조회수: {video_data['view_count']:,}회\n\n"
+                "📝 자막을 가져오는 중...",
+                parse_mode='Markdown'
+            )
+            
+            # 자막 가져오기
+            transcript = self.youtube_service.get_video_transcript(video_id)
+            transcript_text = transcript.get('text', '') if transcript else ''
+            
+            if not transcript_text:
+                await progress_msg.edit_text(
+                    f"⚠️ **자막을 찾을 수 없습니다**\n\n"
+                    f"📹 **{video_data['title']}**\n"
+                    f"👤 채널: {video_data['channel_name']}\n"
+                    f"👀 조회수: {video_data['view_count']:,}회\n"
+                    f"🔗 {url}\n\n"
+                    "자막이 없거나 비활성화된 영상입니다.",
+                    parse_mode='Markdown'
+                )
+                return
+            
+            await progress_msg.edit_text(
+                "🎬 **YouTube 영상 분석 중...**\n\n"
+                f"📹 **{video_data['title'][:50]}...**\n"
+                f"👤 채널: {video_data['channel_name']}\n\n"
                 "🤖 AI 분석 진행 중... (30초~1분 소요)",
                 parse_mode='Markdown'
             )
             
             # AI 분석 실행
-            analysis_result = await self.analyze_video_with_ai(video_data)
+            analysis_result = self.analysis_service.analyze_transcript(
+                transcript_text=transcript_text,
+                video_title=video_data['title'],
+                channel_name=video_data['channel_name']
+            )
             
-            if analysis_result:
-                # 결과 전송
-                await self.send_analysis_result(update, video_data, analysis_result, progress_msg)
-            else:
-                await progress_msg.edit_text(
-                    "❌ **AI 분석에 실패했습니다.**\n\n"
-                    "자막이 없거나 분석할 수 없는 내용입니다."
-                )
+            # 결과 전송
+            await self.send_analysis_result(update, video_data, analysis_result, url, progress_msg)
             
         except Exception as e:
             logger.error(f"YouTube URL 처리 중 오류: {e}")
@@ -678,29 +510,21 @@ class TelegramBotManager:
                 f"오류 내용: {str(e)}"
             )
     
-    async def get_video_data(self, video_id: str) -> dict:
-        """YouTube 영상 데이터 가져오기"""
+    async def get_video_info(self, video_id: str) -> Optional[Dict]:
+        """YouTube 영상 정보 가져오기"""
         try:
             # YouTube API로 영상 정보 가져오기
-            video_response = self.reporter._execute_youtube_api_with_retry(
-                lambda: self.reporter.youtube.videos().list(
-                    part='snippet,contentDetails,statistics',
-                    id=video_id
-                ).execute()
+            video_request = self.youtube_service.youtube.videos().list(
+                part='snippet,statistics,contentDetails',
+                id=video_id
             )
+            video_response = video_request.execute()
             
             if not video_response['items']:
                 return None
             
             video_info = video_response['items'][0]
             snippet = video_info['snippet']
-            
-            # 자막 가져오기 시도
-            transcript_text = ""
-            try:
-                transcript_text = self.reporter.get_video_transcript(video_id)
-            except Exception as e:
-                logger.warning(f"자막 가져오기 실패 (video_id: {video_id}): {e}")
             
             return {
                 'video_id': video_id,
@@ -709,110 +533,99 @@ class TelegramBotManager:
                 'channel_name': snippet['channelTitle'],
                 'channel_id': snippet['channelId'],
                 'published_at': snippet['publishedAt'],
-                'duration': video_info['contentDetails']['duration'],
                 'view_count': int(video_info['statistics'].get('viewCount', 0)),
                 'like_count': int(video_info['statistics'].get('likeCount', 0)),
-                'transcript': transcript_text,
-                'url': f"https://www.youtube.com/watch?v={video_id}"
+                'comment_count': int(video_info['statistics'].get('commentCount', 0)),
             }
             
         except Exception as e:
-            logger.error(f"영상 데이터 가져오기 실패: {e}")
+            logger.error(f"영상 정보 가져오기 실패: {e}")
             return None
     
-    async def analyze_video_with_ai(self, video_data: dict) -> dict:
-        """AI를 사용한 영상 분석"""
-        try:
-            if not video_data['transcript']:
-                return None
-            
-            # AI 분석 실행 (올바른 파라미터 사용)
-            analysis = self.reporter.analyze_content_with_ai(
-                title=video_data['title'],
-                transcript=video_data['transcript'],
-                channel_name=video_data['channel_name'],
-                video_id=video_data['video_id']
-            )
-            
-            return analysis
-            
-        except Exception as e:
-            logger.error(f"AI 분석 실패: {e}")
-            return None
-    
-    async def send_analysis_result(self, update: Update, video_data: dict, analysis: dict, progress_msg):
+    async def send_analysis_result(self, update: Update, video_data: dict, analysis: dict, url: str, progress_msg):
         """분석 결과 전송"""
         try:
             # 기본 영상 정보
             basic_info = (
-                f"🎬 **YouTube 영상 요약 완료**\n\n"
+                f"🎬 **YouTube 영상 AI 요약 완료**\n\n"
                 f"📹 **제목:** {video_data['title']}\n"
                 f"👤 **채널:** {video_data['channel_name']}\n"
                 f"👀 **조회수:** {video_data['view_count']:,}회\n"
                 f"👍 **좋아요:** {video_data['like_count']:,}개\n"
-                f"🔗 **링크:** {video_data['url']}\n"
+                f"🔗 **링크:** {url}\n"
             )
             
-            # 종합 요약
-            executive_summary = analysis.get('summary', '요약 정보가 없습니다.')
+            # 요약 정보
+            summary = analysis.get('summary', '요약 정보가 없습니다.')
+            market_outlook = analysis.get('market_outlook', '')
+            sentiment_score = analysis.get('sentiment_score', 0)
+            
+            # 감정 점수를 이모지로 변환
+            if sentiment_score > 0.3:
+                sentiment_emoji = "📈 긍정적"
+            elif sentiment_score < -0.3:
+                sentiment_emoji = "📉 부정적"
+            else:
+                sentiment_emoji = "⚖️ 중립적"
+            
             summary_text = (
                 f"{basic_info}\n"
-                f"📋 **종합 요약:**\n{executive_summary}\n"
+                f"📋 **AI 요약:**\n{summary}\n\n"
+                f"📊 **시장 전망:** {sentiment_emoji} ({sentiment_score:.2f})\n"
             )
             
-            # 메인 요약 전송 (진행 메시지 업데이트)
+            if market_outlook:
+                summary_text += f"🔮 **시장 관점:** {market_outlook}\n"
+            
+            # 메인 요약 전송
             await progress_msg.edit_text(
                 summary_text,
                 parse_mode='Markdown'
             )
             
-            # 상세 분석이 있으면 추가 메시지 전송
-            if analysis.get('detailed_analysis'):
-                detailed_analysis = analysis['detailed_analysis']
+            # 주요 인사이트
+            key_insights = analysis.get('key_insights', [])
+            if key_insights:
+                insights_text = "💡 **주요 인사이트:**\n"
+                for i, insight in enumerate(key_insights[:5], 1):
+                    insights_text += f"{i}. {insight}\n"
                 
-                # 상세 인사이트
-                if detailed_analysis.get('detailed_insights'):
-                    detailed_text = f"🔍 **상세 분석:**\n{detailed_analysis['detailed_insights']}"
-                    
-                    if len(detailed_text) > 4000:
-                        # 긴 텍스트는 나누어 전송
-                        chunks = [detailed_text[i:i+4000] for i in range(0, len(detailed_text), 4000)]
-                        for i, chunk in enumerate(chunks):
-                            chunk_title = f"📄 **상세 분석 ({i+1}/{len(chunks)})**\n\n" if i == 0 else ""
-                            await update.message.reply_text(
-                                chunk_title + chunk,
-                                parse_mode='Markdown'
-                            )
-                    else:
-                        await update.message.reply_text(
-                            detailed_text,
-                            parse_mode='Markdown'
-                        )
+                await update.message.reply_text(
+                    insights_text,
+                    parse_mode='Markdown'
+                )
+            
+            # 투자 테마 및 실행 가능한 조언
+            investment_themes = analysis.get('investment_themes', [])
+            actionable_insights = analysis.get('actionable_insights', [])
+            
+            if investment_themes or actionable_insights:
+                investment_text = ""
                 
-                # 투자 시사점이 있으면 전송
-                if detailed_analysis.get('investment_implications'):
-                    investment_implications = detailed_analysis['investment_implications']
-                    if isinstance(investment_implications, dict):
-                        investment_text = "💰 **투자 시사점:**\n"
-                        if investment_implications.get('short_term'):
-                            investment_text += f"**단기:** {investment_implications['short_term']}\n"
-                        if investment_implications.get('long_term'):
-                            investment_text += f"**장기:** {investment_implications['long_term']}\n"
-                    else:
-                        investment_text = f"💰 **투자 시사점:**\n{investment_implications}"
-                    
-                    await update.message.reply_text(
-                        investment_text,
-                        parse_mode='Markdown'
-                    )
+                if investment_themes:
+                    investment_text += "🏷️ **투자 테마:**\n"
+                    investment_text += "• " + "\n• ".join(investment_themes[:3]) + "\n\n"
                 
-                # 핵심 키워드 표시
-                if analysis.get('topics'):
-                    topics_text = f"🏷️ **핵심 키워드:** {analysis['topics']}"
-                    await update.message.reply_text(
-                        topics_text,
-                        parse_mode='Markdown'
-                    )
+                if actionable_insights:
+                    investment_text += "⚡ **실행 가능한 조언:**\n"
+                    for i, advice in enumerate(actionable_insights[:3], 1):
+                        investment_text += f"{i}. {advice}\n"
+                
+                await update.message.reply_text(
+                    investment_text,
+                    parse_mode='Markdown'
+                )
+            
+            # 언급된 주요 기업/인물
+            mentioned_entities = analysis.get('mentioned_entities', [])
+            if mentioned_entities:
+                entities_text = f"🏢 **언급된 주요 기업/인물:**\n"
+                entities_text += "• " + "\n• ".join(mentioned_entities[:5])
+                
+                await update.message.reply_text(
+                    entities_text,
+                    parse_mode='Markdown'
+                )
                     
         except Exception as e:
             logger.error(f"결과 전송 실패: {e}")
@@ -823,76 +636,25 @@ class TelegramBotManager:
         text = update.message.text.strip()
         
         try:
-            # URL에서 채널 ID 추출 시도
-            channel_id = None
+            # 채널 검색
+            channels = self.youtube_service.search_channels(text, max_results=1)
             
-            # 다양한 YouTube 채널 URL 패턴 처리
-            channel_patterns = [
-                r'youtube\.com/channel/([a-zA-Z0-9_-]+)',
-                r'youtube\.com/@([a-zA-Z0-9_-]+)',
-                r'youtube\.com/c/([a-zA-Z0-9_-]+)',
-                r'youtube\.com/user/([a-zA-Z0-9_-]+)',
-                r'^UC[a-zA-Z0-9_-]+$',  # 직접 채널 ID
-                r'^@([a-zA-Z0-9_-]+)$'  # @username 형식
-            ]
-            
-            for pattern in channel_patterns:
-                match = re.search(pattern, text)
-                if match:
-                    if pattern.startswith('^UC'):  # 직접 채널 ID
-                        channel_id = text
-                    elif pattern.startswith('^@'):  # @username
-                        username = match.group(1)
-                        # username으로 검색
-                        text = username
-                    else:
-                        # URL에서 추출된 경우 검색으로 처리
-                        text = match.group(1)
-                    break
-            
-            # 채널 ID가 직접 제공되지 않은 경우 검색
-            if not channel_id:
-                # YouTube 검색으로 채널 찾기
-                result = self.reporter._execute_youtube_api_with_retry(
-                    lambda: self.reporter.youtube.search().list(
-                        part='snippet',
-                        q=text,
-                        type='channel',
-                        maxResults=5
-                    ).execute()
+            if not channels:
+                await update.message.reply_text(
+                    f"❌ '{text}' 채널을 찾을 수 없습니다.\n"
+                    "다른 검색어를 시도해보세요."
                 )
-                
-                if not result['items']:
-                    await update.message.reply_text(
-                        f"❌ '{text}' 채널을 찾을 수 없습니다.\n"
-                        "다른 검색어를 시도해보세요."
-                    )
-                    return
-                
-                # 첫 번째 결과 사용
-                item = result['items'][0]
-                channel_id = item['id']['channelId']
-            
-            # 채널 상세 정보 가져오기
-            channel_response = self.reporter._execute_youtube_api_with_retry(
-                lambda: self.reporter.youtube.channels().list(
-                    part='snippet,statistics',
-                    id=channel_id
-                ).execute()
-            )
-            
-            if not channel_response['items']:
-                await update.message.reply_text("❌ 채널 정보를 가져올 수 없습니다.")
                 return
             
-            channel_info = channel_response['items'][0]
-            snippet = channel_info['snippet']
-            statistics = channel_info['statistics']
+            channel_info = channels[0]
+            channel_id = channel_info['channel_id']
             
-            channel_name = snippet['title']
-            description = snippet.get('description', '')[:200] + "..." if len(snippet.get('description', '')) > 200 else snippet.get('description', '')
-            subscriber_count = int(statistics.get('subscriberCount', 0))
-            video_count = int(statistics.get('videoCount', 0))
+            # 상세 정보 가져오기
+            detailed_info = self.youtube_service.get_channel_details(channel_id)
+            
+            if not detailed_info:
+                await update.message.reply_text("❌ 채널 정보를 가져올 수 없습니다.")
+                return
             
             # 데이터베이스에 추가
             db = SessionLocal()
@@ -900,15 +662,17 @@ class TelegramBotManager:
             # 중복 확인
             existing = db.query(Channel).filter(Channel.channel_id == channel_id).first()
             if existing:
-                await update.message.reply_text(f"⚠️ **{channel_name}**은 이미 구독 중인 채널입니다.")
+                await update.message.reply_text(f"⚠️ **{detailed_info['channel_name']}**은 이미 구독 중인 채널입니다.")
                 db.close()
                 return
             
             channel = Channel(
                 channel_id=channel_id,
-                channel_name=channel_name,
-                channel_url=f"https://www.youtube.com/channel/{channel_id}",
-                description=description
+                channel_name=detailed_info['channel_name'],
+                channel_url=detailed_info['channel_url'],
+                description=detailed_info['description'][:500] if detailed_info['description'] else '',
+                subscriber_count=detailed_info['subscriber_count'],
+                video_count=detailed_info['video_count']
             )
             
             db.add(channel)
@@ -916,12 +680,12 @@ class TelegramBotManager:
             db.close()
             
             await update.message.reply_text(
-                f"✅ **{channel_name}** 채널이 추가되었습니다!\n\n"
+                f"✅ **{detailed_info['channel_name']}** 채널이 추가되었습니다!\n\n"
                 f"📊 **채널 정보:**\n"
-                f"• 구독자: {subscriber_count:,}명\n"
-                f"• 영상 수: {video_count:,}개\n"
-                f"• 설명: {description}\n\n"
-                f"🔗 https://www.youtube.com/channel/{channel_id}",
+                f"• 구독자: {detailed_info['subscriber_count']:,}명\n"
+                f"• 영상 수: {detailed_info['video_count']:,}개\n"
+                f"• 설명: {detailed_info['description'][:100]}...\n\n"
+                f"🔗 {detailed_info['channel_url']}",
                 parse_mode='Markdown'
             )
                 
@@ -929,7 +693,6 @@ class TelegramBotManager:
             logger.error(f"채널 추가 중 오류: {e}")
             await update.message.reply_text(f"❌ 채널 추가 중 오류 발생: {str(e)}")
         
-        # 상태 초기화
         context.user_data.pop('action', None)
     
     async def process_add_keyword(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -975,27 +738,120 @@ class TelegramBotManager:
             logger.error(f"키워드 추가 중 오류: {e}")
             await update.message.reply_text(f"❌ 키워드 추가 중 오류 발생: {str(e)}")
         
-        # 상태 초기화
+        context.user_data.pop('action', None)
+    
+    async def process_keyword_search(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """키워드 검색 처리"""
+        keyword = update.message.text.strip()
+        
+        if not keyword:
+            await update.message.reply_text("❌ 키워드를 입력해주세요.")
+            return
+        
+        progress_msg = await update.message.reply_text(
+            f"🔍 **'{keyword}' 키워드 검색 중...**\n\n"
+            "📹 YouTube에서 관련 영상을 검색하고 있습니다...\n"
+            "⏳ 잠시만 기다려주세요."
+        )
+        
+        try:
+            # YouTube에서 키워드 검색
+            recent_date = datetime.now() - timedelta(days=7)
+            videos = self.youtube_service.search_videos_by_keyword(
+                keyword=keyword,
+                max_results=5,
+                published_after=recent_date
+            )
+            
+            if not videos:
+                await progress_msg.edit_text(
+                    f"🔍 **'{keyword}' 검색 결과**\n\n"
+                    f"❌ 최근 7일 내 '{keyword}' 관련 영상을 찾을 수 없습니다.\n\n"
+                    "💡 **제안:**\n"
+                    "• 다른 키워드로 검색해보세요\n"
+                    "• 더 일반적인 용어를 사용해보세요"
+                )
+                return
+            
+            # 검색 결과 표시
+            results_text = f"🔍 **'{keyword}' 검색 결과 ({len(videos)}개)**\n\n"
+            
+            for i, video in enumerate(videos, 1):
+                results_text += f"**{i}. {video['title'][:60]}...**\n"
+                results_text += f"👤 {video['channel_name']}\n"
+                results_text += f"👀 {video['view_count']:,}회 | 📅 {video['published_at'].strftime('%m-%d')}\n"
+                results_text += f"🔗 https://www.youtube.com/watch?v={video['video_id']}\n\n"
+            
+            await progress_msg.edit_text(
+                results_text,
+                parse_mode='Markdown'
+            )
+            
+        except Exception as e:
+            logger.error(f"키워드 검색 중 오류: {e}")
+            await progress_msg.edit_text(
+                f"❌ **키워드 검색 중 오류가 발생했습니다.**\n\n"
+                f"오류 내용: {str(e)}"
+            )
+        
         context.user_data.pop('action', None)
     
     async def run_analysis(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """분석 실행"""
-        await update.callback_query.edit_message_text("🔍 **분석을 시작합니다...**")
+        await update.callback_query.edit_message_text(
+            "📊 **정기 분석을 시작합니다...**\n\n"
+            "⏳ 구독된 채널의 최신 영상들을 분석 중입니다...\n"
+            "이 작업은 몇 분이 소요될 수 있습니다."
+        )
         
         try:
-            # 분석 실행
-            success = self.reporter.run_detailed_analysis(
-                hours_back=24,
-                send_telegram=True
-            )
+            db = SessionLocal()
+            channels = db.query(Channel).all()
             
-            if success:
+            if not channels:
                 await update.callback_query.edit_message_text(
-                    "✅ **분석이 완료되었습니다!**\n"
-                    "결과가 별도 메시지로 전송됩니다."
+                    "❌ **분석할 채널이 없습니다.**\n\n"
+                    "먼저 채널을 추가해주세요."
                 )
-            else:
-                await update.callback_query.edit_message_text("❌ 분석 중 오류가 발생했습니다.")
+                db.close()
+                return
+            
+            total_videos = 0
+            analyzed_videos = 0
+            
+            # 최근 24시간 영상 분석
+            recent_date = datetime.now() - timedelta(hours=24)
+            
+            for channel in channels:
+                videos = self.youtube_service.get_channel_videos(
+                    channel_id=channel.channel_id,
+                    max_results=10,
+                    published_after=recent_date
+                )
+                
+                total_videos += len(videos)
+                
+                for video in videos:
+                    # 자막 가져오기 및 분석
+                    transcript = self.youtube_service.get_video_transcript(video['video_id'])
+                    if transcript and transcript.get('text'):
+                        analysis = self.analysis_service.analyze_transcript(
+                            transcript_text=transcript['text'],
+                            video_title=video['title'],
+                            channel_name=channel.channel_name
+                        )
+                        if analysis.get('summary'):
+                            analyzed_videos += 1
+            
+            db.close()
+            
+            await update.callback_query.edit_message_text(
+                f"✅ **분석 완료!**\n\n"
+                f"📺 총 채널: {len(channels)}개\n"
+                f"📹 발견된 영상: {total_videos}개\n"
+                f"🤖 분석 완료: {analyzed_videos}개\n\n"
+                f"📊 자세한 분석 결과는 개별적으로 확인하실 수 있습니다."
+            )
                 
         except Exception as e:
             logger.error(f"분석 실행 중 오류: {e}")
@@ -1004,26 +860,32 @@ class TelegramBotManager:
     async def show_stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """통계 표시"""
         try:
-            # 캐시 통계
-            stats = self.reporter.cache_service.get_cache_statistics()
-            
-            # 채널 통계
             db = SessionLocal()
+            
+            # 기본 통계
             total_channels = db.query(Channel).count()
             total_keywords = db.query(Keyword).count()
+            total_videos = db.query(Video).count()
+            total_analyses = db.query(Analysis).count()
+            
+            # 최근 7일 분석
+            recent_date = datetime.now() - timedelta(days=7)
+            recent_analyses = db.query(Analysis).filter(Analysis.created_at >= recent_date).count()
+            
             db.close()
             
             text = (
                 f"📊 **시스템 통계**\n\n"
                 f"📺 **구독 채널**: {total_channels}개\n"
                 f"🔍 **키워드**: {total_keywords}개\n"
-                f"📹 **전체 영상**: {stats.get('total_videos', 0)}개\n"
-                f"🎯 **캐시된 분석**: {stats.get('cached_analyses', 0)}개\n"
-                f"📝 **자막 보유**: {stats.get('total_transcripts', 0)}개\n"
-                f"📊 **캐시 히트율**: {stats.get('cache_hit_rate', 0)}%\n"
-                f"🆕 **최근 7일 분석**: {stats.get('recent_analyses', 0)}개\n\n"
-                f"🎬 **새로운 기능**: YouTube URL 즉시 요약\n"
-                f"🔎 **키워드 검색**: 등록 안 된 키워드도 검색 가능"
+                f"📹 **총 영상**: {total_videos}개\n"
+                f"🤖 **총 분석**: {total_analyses}개\n"
+                f"🆕 **최근 7일 분석**: {recent_analyses}개\n\n"
+                f"🎬 **주요 기능:**\n"
+                f"• YouTube URL 즉시 AI 요약\n"
+                f"• 키워드/채널 관리 (추가/삭제)\n"
+                f"• 정기 분석 및 트렌드 보고서\n"
+                f"• 실시간 키워드 검색"
             )
             
             keyboard = [[InlineKeyboardButton("🔙 메인 메뉴", callback_data="back_main")]]
@@ -1048,12 +910,18 @@ class TelegramBotManager:
         application.add_handler(CallbackQueryHandler(self.button_handler))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, self.message_handler))
         
-        print("🤖 텔레그램 봇이 시작되었습니다...")
-        print("🎬 YouTube URL 요약 기능이 활성화되었습니다!")
-        print("🔎 키워드 검색 기능이 활성화되었습니다!")
-        print("📺 채널 관리 기능이 완전히 구현되었습니다!")
+        logger.info("🤖 통합 텔레그램 봇이 시작되었습니다!")
+        logger.info("="*50)
+        logger.info("📱 주요 기능:")
+        logger.info("• 🎬 YouTube URL 즉시 AI 요약")
+        logger.info("• 📺 채널 구독 관리 (추가/삭제)")
+        logger.info("• 🔍 키워드 관리 (추가/삭제)")
+        logger.info("• 🔎 실시간 키워드 검색")
+        logger.info("• 📊 정기 분석 및 통계")
+        logger.info("="*50)
+        
         application.run_polling()
 
 if __name__ == "__main__":
-    bot = TelegramBotManager()
+    bot = UnifiedTelegramBot()
     bot.run() 
