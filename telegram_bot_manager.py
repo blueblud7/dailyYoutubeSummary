@@ -53,10 +53,26 @@ class TelegramBotManager:
         
     def extract_video_id(self, url: str) -> str:
         """YouTube URL에서 영상 ID 추출"""
+        # @ 기호나 기타 문자가 앞에 붙은 경우 제거
+        clean_url = url.strip()
+        
+        # @ 기호로 시작하는 경우 제거
+        if clean_url.startswith('@'):
+            clean_url = clean_url[1:]
+        
+        # 공백이나 기타 문자 제거
+        clean_url = clean_url.strip()
+        
         for pattern in self.youtube_patterns:
-            match = re.search(pattern, url)
+            match = re.search(pattern, clean_url)
             if match:
-                return match.group(1)
+                # URL 파라미터에서 video ID만 추출 (? 이후 제거)
+                video_id = match.group(1)
+                if '&' in video_id:
+                    video_id = video_id.split('&')[0]
+                if '?' in video_id:
+                    video_id = video_id.split('?')[0]
+                return video_id
         return None
         
     def is_authorized(self, update: Update) -> bool:

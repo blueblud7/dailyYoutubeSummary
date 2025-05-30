@@ -18,10 +18,26 @@ class YouTubeURLTester:
         
     def extract_video_id(self, url: str) -> str:
         """YouTube URL에서 영상 ID 추출"""
+        # @ 기호나 기타 문자가 앞에 붙은 경우 제거
+        clean_url = url.strip()
+        
+        # @ 기호로 시작하는 경우 제거
+        if clean_url.startswith('@'):
+            clean_url = clean_url[1:]
+        
+        # 공백이나 기타 문자 제거
+        clean_url = clean_url.strip()
+        
         for pattern in self.youtube_patterns:
-            match = re.search(pattern, url)
+            match = re.search(pattern, clean_url)
             if match:
-                return match.group(1)
+                # URL 파라미터에서 video ID만 추출 (? 이후 제거)
+                video_id = match.group(1)
+                if '&' in video_id:
+                    video_id = video_id.split('&')[0]
+                if '?' in video_id:
+                    video_id = video_id.split('?')[0]
+                return video_id
         return None
 
 def test_url_extraction():
@@ -39,11 +55,14 @@ def test_url_extraction():
         "https://m.youtube.com/watch?v=dQw4w9WgXcQ",
         "https://youtube.com/watch?v=dQw4w9WgXcQ&list=PLxyz",
         "https://youtu.be/dQw4w9WgXcQ?t=30",
+        "@https://youtu.be/hWqWQIIOtHM?si=PVnHhifSm8MfwBZA",  # @ 기호가 포함된 URL
+        "@https://www.youtube.com/watch?v=hWqWQIIOtHM&si=xyz",  # @ 기호와 파라미터가 포함된 URL
+        " @https://youtu.be/hWqWQIIOtHM ",  # 앞뒤 공백과 @ 기호
         "이것은 YouTube URL이 아닙니다",
         "https://other-site.com/video"
     ]
     
-    print("🔍 YouTube URL 추출 테스트\n")
+    print("🔍 YouTube URL 추출 테스트 (개선된 버전)\n")
     
     for i, url in enumerate(test_urls, 1):
         video_id = tester.extract_video_id(url)
