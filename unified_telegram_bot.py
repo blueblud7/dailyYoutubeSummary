@@ -463,7 +463,7 @@ class UnifiedTelegramBot:
         
         try:
             # 영상 정보 가져오기
-            video_data = await self.get_video_info(video_id)
+            video_data = self.get_video_info(video_id)
             
             if not video_data:
                 await progress_msg.edit_text(
@@ -526,9 +526,17 @@ class UnifiedTelegramBot:
                 f"오류 내용: {str(e)}"
             )
     
-    async def get_video_info(self, video_id: str) -> Optional[Dict]:
+    def get_video_info(self, video_id: str) -> Optional[Dict]:
         """YouTube 영상 정보 가져오기"""
         try:
+            logger.info(f"🔍 영상 정보 요청 시작: video_id={video_id}")
+            
+            # YouTube API 서비스 확인
+            if not self.youtube_service or not self.youtube_service.youtube:
+                logger.error("❌ YouTube 서비스가 초기화되지 않았습니다")
+                return None
+            
+            logger.info("📡 YouTube API 호출 중...")
             # YouTube API로 영상 정보 가져오기
             video_request = self.youtube_service.youtube.videos().list(
                 part='snippet,statistics,contentDetails',
@@ -536,11 +544,16 @@ class UnifiedTelegramBot:
             )
             video_response = video_request.execute()
             
+            logger.info(f"📊 API 응답 받음: items 개수={len(video_response.get('items', []))}")
+            
             if not video_response['items']:
+                logger.warning(f"⚠️ 영상 ID {video_id}에 대한 정보가 없습니다")
                 return None
             
             video_info = video_response['items'][0]
             snippet = video_info['snippet']
+            
+            logger.info(f"✅ 영상 정보 추출 완료: title={snippet['title'][:50]}...")
             
             return {
                 'video_id': video_id,
@@ -555,7 +568,10 @@ class UnifiedTelegramBot:
             }
             
         except Exception as e:
-            logger.error(f"영상 정보 가져오기 실패: {e}")
+            logger.error(f"❌ 영상 정보 가져오기 실패: {e}")
+            logger.error(f"❌ 오류 타입: {type(e).__name__}")
+            import traceback
+            logger.error(f"❌ 트레이스백: {traceback.format_exc()}")
             return None
     
     async def send_analysis_result(self, update: Update, video_data: dict, analysis: dict, url: str, progress_msg):

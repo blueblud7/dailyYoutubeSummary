@@ -239,7 +239,9 @@ class YouTubeService:
     def get_video_transcript(self, video_id: str, language: str = 'ko') -> Optional[Dict]:
         """비디오의 자막을 가져옵니다."""
         try:
-            # 먼저 수동 자막을 시도
+            self.logger.info(f"🔍 자막 검색 시작: video_id={video_id}, 언어={language}")
+            
+            # 자막 목록 가져오기
             transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
             
             transcript_text = ""
@@ -256,7 +258,8 @@ class YouTubeService:
             
             found_transcript = False
             
-            # 수동 자막 우선 시도
+            # 1단계: 수동 자막 우선 시도
+            self.logger.info("📝 수동 자막 검색 중...")
             for lang_list in language_priorities:
                 if found_transcript:
                     break
@@ -267,12 +270,14 @@ class YouTubeService:
                     is_auto_generated = False
                     final_language = transcript.language_code
                     found_transcript = True
+                    self.logger.info(f"✅ 수동 자막 발견: {final_language}")
                     break
                 except NoTranscriptFound:
                     continue
             
-            # 수동 자막이 없으면 자동 생성 자막 시도
+            # 2단계: 수동 자막이 없으면 자동 생성 자막 시도
             if not found_transcript:
+                self.logger.info("🤖 자동생성 자막 검색 중...")
                 for lang_list in language_priorities:
                     if found_transcript:
                         break
@@ -283,45 +288,111 @@ class YouTubeService:
                         is_auto_generated = True
                         final_language = transcript.language_code
                         found_transcript = True
+                        self.logger.info(f"✅ 자동생성 자막 발견: {final_language}")
                         break
                     except NoTranscriptFound:
                         continue
             
-            # 모든 시도가 실패한 경우
+            # 3단계: 모든 우선순위 언어에서 자막을 찾지 못한 경우
             if not found_transcript:
-                # 사용 가능한 자막 목록 로깅
+                # 사용 가능한 자막 목록 확인
                 available_transcripts = []
                 for transcript in transcript_list:
-                    available_transcripts.append(f"{transcript.language_code}({'auto' if transcript.is_generated else 'manual'})")
+                    transcript_type = 'auto' if transcript.is_generated else 'manual'
+                    available_transcripts.append(f"{transcript.language_code}({transcript_type})")
                 
-                self.logger.warning(f"비디오 {video_id}: 우선순위 언어에서 자막을 찾을 수 없습니다. 사용 가능: {', '.join(available_transcripts) if available_transcripts else '없음'}")
+                self.logger.warning(f"비디오 {video_id}: 우선순위 언어에서 자막을 찾을 수 없습니다.")
+                self.logger.info(f"사용 가능한 자막: {', '.join(available_transcripts) if available_transcripts else '없음'}")
                 
-                # 마지막 시도: 사용 가능한 첫 번째 자막 사용
+                # 4단계: 마지막 시도 - 사용 가능한 첫 번째 자막 사용 (자동생성 자막 우선)
                 if available_transcripts:
                     try:
-                        first_transcript = list(transcript_list)[0]
-                        transcript_data = first_transcript.fetch()
-                        transcript_text = " ".join([entry['text'] for entry in transcript_data])
-                        is_auto_generated = first_transcript.is_generated
-                        final_language = first_transcript.language_code
-                        found_transcript = True
-                        self.logger.info(f"비디오 {video_id}: {final_language} 자막 사용")
+                        # 자동생성 자막 먼저 찾기
+                        auto_transcript = None
+                        manual_transcript = None
+                        
+                        for transcript in transcript_list:
+                            if transcript.is_generated and auto_transcript is None:
+                                auto_transcript = transcript
+                            elif not transcript.is_generated and manual_transcript is None:
+                                manual_transcript = transcript
+                        
+                        # 자동생성 자막이 있으면 우선 사용
+                        chosen_transcript = auto_transcript if auto_transcript else manual_transcript
+                        
+                        if chosen_transcript:
+                            transcript_data = chosen_transcript.fetch()
+                            transcript_text = " ".join([entry['text'] for entry in transcript_data])
+                            is_auto_generated = chosen_transcript.is_generated
+                            final_language = chosen_transcript.language_code
+                            found_transcript = True
+                            transcript_type = "자동생성" if is_auto_generated else "수동"
+                            self.logger.info(f"✅ 대체 자막 사용: {final_language} ({transcript_type})")
+                        
                     except Exception as e:
-                        self.logger.error(f"비디오 {video_id}: 첫 번째 사용 가능한 자막도 가져오기 실패: {e}")
+                        self.logger.error(f"비디오 {video_id}: 대체 자막 가져오기 실패: {e}")
                         return None
                 else:
+                    self.logger.error(f"비디오 {video_id}: 사용 가능한 자막이 전혀 없습니다")
                     return None
             
-            return {
-                'video_id': video_id,
-                'transcript_text': transcript_text,
-                'is_auto_generated': is_auto_generated,
-                'language': final_language
-            }
+            if found_transcript and transcript_text:
+                return {
+                    'video_id': video_id,
+                    'transcript_text': transcript_text,
+                    'is_auto_generated': is_auto_generated,
+                    'language': final_language
+                }
+            else:
+                self.logger.warning(f"비디오 {video_id}: 자막 텍스트가 비어있습니다")
+                return None
             
         except TranscriptsDisabled:
             self.logger.warning(f"비디오 {video_id}의 자막이 비활성화되어 있습니다")
             return None
         except Exception as e:
             self.logger.error(f"자막 조회 중 오류 발생: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
+    def get_video_info(self, video_id: str) -> Optional[Dict]:
+        """YouTube 영상 정보 가져오기"""
+        try:
+            self.logger.info(f"🔍 영상 정보 요청 시작: video_id={video_id}")
+            
+            # YouTube API로 영상 정보 가져오기
+            video_request = self.youtube.videos().list(
+                part='snippet,statistics,contentDetails',
+                id=video_id
+            )
+            video_response = video_request.execute()
+            
+            self.logger.info(f"📊 API 응답 받음: items 개수={len(video_response.get('items', []))}")
+            
+            if not video_response['items']:
+                self.logger.warning(f"⚠️ 영상 ID {video_id}에 대한 정보가 없습니다")
+                return None
+            
+            video_info = video_response['items'][0]
+            snippet = video_info['snippet']
+            
+            self.logger.info(f"✅ 영상 정보 추출 완료: title={snippet['title'][:50]}...")
+            
+            return {
+                'video_id': video_id,
+                'title': snippet['title'],
+                'description': snippet.get('description', ''),
+                'channel_name': snippet['channelTitle'],
+                'channel_id': snippet['channelId'],
+                'published_at': snippet['publishedAt'],
+                'view_count': int(video_info['statistics'].get('viewCount', 0)),
+                'like_count': int(video_info['statistics'].get('likeCount', 0)),
+                'comment_count': int(video_info['statistics'].get('commentCount', 0)),
+            }
+            
+        except Exception as e:
+            if self._handle_quota_exceeded(e):
+                return self.get_video_info(video_id)
+            self.logger.error(f"❌ 영상 정보 가져오기 실패: {e}")
             return None 

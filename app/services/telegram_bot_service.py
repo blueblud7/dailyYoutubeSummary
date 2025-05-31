@@ -286,13 +286,25 @@ class TelegramBotService:
             transcript_text = video_data.get('transcript', '')
             
             if not transcript_text:
+                # 자막 정보에 따라 다른 메시지 제공
+                if video_data.get('is_auto_generated') is not None:
+                    # 자막 시도했지만 텍스트가 없는 경우
+                    subtitle_info = (
+                        f"🔍 자막 상태: {'자동생성 자막' if video_data.get('is_auto_generated') else '수동 자막'} "
+                        f"({video_data.get('transcript_language', 'ko')})\n"
+                        "⚠️ 자막 텍스트를 가져올 수 없습니다."
+                    )
+                else:
+                    # 자막 자체가 없는 경우
+                    subtitle_info = "자막이 없거나 비활성화된 영상입니다."
+                
                 await progress_msg.edit_text(
                     f"⚠️ **자막을 찾을 수 없습니다**\n\n"
                     f"📹 **{video_data['title']}**\n"
                     f"👤 채널: {video_data['channel_name']}\n"
                     f"👀 조회수: {video_data['view_count']:,}회\n"
                     f"🔗 {url}\n\n"
-                    "자막이 없거나 비활성화된 영상입니다.",
+                    f"{subtitle_info}",
                     parse_mode='Markdown'
                 )
                 return
@@ -331,7 +343,25 @@ class TelegramBotService:
             
             # 자막 가져오기
             transcript = youtube_service.get_video_transcript(video_id)
-            transcript_text = transcript.get('text', '') if transcript else ''
+            transcript_text = ''
+            transcript_language = 'ko'
+            is_auto_generated = False
+            
+            if transcript:
+                transcript_text = transcript.get('transcript_text', '')
+                transcript_language = transcript.get('language', 'ko') 
+                is_auto_generated = transcript.get('is_auto_generated', False)
+                
+                # 자막 타입 로깅
+                if transcript_text:
+                    if is_auto_generated:
+                        self.logger.info(f"✅ 자동생성 자막 발견: {transcript_language}")
+                    else:
+                        self.logger.info(f"✅ 수동 자막 발견: {transcript_language}")
+                else:
+                    self.logger.warning(f"⚠️ 자막 텍스트가 비어있음")
+            else:
+                self.logger.warning(f"⚠️ 자막을 찾을 수 없음: video_id={video_id}")
             
             return {
                 'video_id': video_id,
@@ -341,6 +371,8 @@ class TelegramBotService:
                 'like_count': video_info.get('like_count', 0),
                 'published_at': video_info['published_at'],
                 'transcript': transcript_text,
+                'transcript_language': transcript_language,
+                'is_auto_generated': is_auto_generated,
                 'url': f"https://www.youtube.com/watch?v={video_id}"
             }
             
