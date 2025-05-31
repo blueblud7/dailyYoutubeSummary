@@ -258,39 +258,45 @@ class YouTubeService:
             
             found_transcript = False
             
-            # 1단계: 수동 자막 우선 시도
-            self.logger.info("📝 수동 자막 검색 중...")
+            # 1단계: 자동생성 자막을 먼저 시도 (더 안정적)
+            self.logger.info("🤖 자동생성 자막 우선 검색 중...")
             for lang_list in language_priorities:
                 if found_transcript:
                     break
                 try:
-                    transcript = transcript_list.find_manually_created_transcript(lang_list)
+                    transcript = transcript_list.find_generated_transcript(lang_list)
                     transcript_data = transcript.fetch()
                     transcript_text = " ".join([entry['text'] for entry in transcript_data])
-                    is_auto_generated = False
+                    is_auto_generated = True
                     final_language = transcript.language_code
                     found_transcript = True
-                    self.logger.info(f"✅ 수동 자막 발견: {final_language}")
+                    self.logger.info(f"✅ 자동생성 자막 발견: {final_language}")
                     break
                 except NoTranscriptFound:
                     continue
+                except Exception as e:
+                    self.logger.warning(f"자동생성 자막 가져오기 실패 ({lang_list}): {e}")
+                    continue
             
-            # 2단계: 수동 자막이 없으면 자동 생성 자막 시도
+            # 2단계: 자동생성 자막이 없으면 수동 자막 시도
             if not found_transcript:
-                self.logger.info("🤖 자동생성 자막 검색 중...")
+                self.logger.info("📝 수동 자막 검색 중...")
                 for lang_list in language_priorities:
                     if found_transcript:
                         break
                     try:
-                        transcript = transcript_list.find_generated_transcript(lang_list)
+                        transcript = transcript_list.find_manually_created_transcript(lang_list)
                         transcript_data = transcript.fetch()
                         transcript_text = " ".join([entry['text'] for entry in transcript_data])
-                        is_auto_generated = True
+                        is_auto_generated = False
                         final_language = transcript.language_code
                         found_transcript = True
-                        self.logger.info(f"✅ 자동생성 자막 발견: {final_language}")
+                        self.logger.info(f"✅ 수동 자막 발견: {final_language}")
                         break
                     except NoTranscriptFound:
+                        continue
+                    except Exception as e:
+                        self.logger.warning(f"수동 자막 가져오기 실패 ({lang_list}): {e}")
                         continue
             
             # 3단계: 모든 우선순위 언어에서 자막을 찾지 못한 경우
@@ -321,13 +327,31 @@ class YouTubeService:
                         chosen_transcript = auto_transcript if auto_transcript else manual_transcript
                         
                         if chosen_transcript:
-                            transcript_data = chosen_transcript.fetch()
-                            transcript_text = " ".join([entry['text'] for entry in transcript_data])
-                            is_auto_generated = chosen_transcript.is_generated
-                            final_language = chosen_transcript.language_code
-                            found_transcript = True
-                            transcript_type = "자동생성" if is_auto_generated else "수동"
-                            self.logger.info(f"✅ 대체 자막 사용: {final_language} ({transcript_type})")
+                            try:
+                                transcript_data = chosen_transcript.fetch()
+                                transcript_text = " ".join([entry['text'] for entry in transcript_data])
+                                is_auto_generated = chosen_transcript.is_generated
+                                final_language = chosen_transcript.language_code
+                                found_transcript = True
+                                transcript_type = "자동생성" if is_auto_generated else "수동"
+                                self.logger.info(f"✅ 대체 자막 사용: {final_language} ({transcript_type})")
+                            except Exception as e:
+                                self.logger.error(f"비디오 {video_id}: 대체 자막 XML 파싱 실패: {e}")
+                                # XML 파싱이 실패하면 다른 자막 시도
+                                if auto_transcript and chosen_transcript == auto_transcript and manual_transcript:
+                                    try:
+                                        self.logger.info("자동생성 자막 실패, 수동 자막 시도...")
+                                        transcript_data = manual_transcript.fetch()
+                                        transcript_text = " ".join([entry['text'] for entry in transcript_data])
+                                        is_auto_generated = False
+                                        final_language = manual_transcript.language_code
+                                        found_transcript = True
+                                        self.logger.info(f"✅ 수동 자막으로 대체: {final_language}")
+                                    except Exception as e2:
+                                        self.logger.error(f"수동 자막도 실패: {e2}")
+                                        return None
+                                else:
+                                    return None
                         
                     except Exception as e:
                         self.logger.error(f"비디오 {video_id}: 대체 자막 가져오기 실패: {e}")
